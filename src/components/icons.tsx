@@ -158,6 +158,15 @@ export function MusicIcon({ className }: IconProps) {
   );
 }
 
+export function SearchIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.6-3.6" />
+    </Svg>
+  );
+}
+
 export function UploadIcon({ className }: IconProps) {
   return (
     <Svg className={className}>

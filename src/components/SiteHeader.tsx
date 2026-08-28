@@ -17,6 +17,7 @@ export async function SiteHeader() {
 
   const items: NavItem[] = [
     { href: '/', label: 'Library' },
+    { href: '/search', label: 'Search' },
     { href: '/likes', label: 'Favourites' },
     { href: '/playlists', label: 'Playlists' },
   ];

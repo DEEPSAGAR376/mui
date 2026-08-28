@@ -20,6 +20,7 @@
 
 import { UTApi } from 'uploadthing/server';
 import { createClient } from '@/lib/supabase/server';
+import { isProvider, type Bucket, type Provider, type StorageKey } from '@/lib/storage/provider';
 import type {
   DeleteTrackResult,
   IngestTrackResult,
@@ -68,6 +69,8 @@ export interface IngestTrackPayload {
   genre?: string[];
   audio_url: string;
   audio_key: string;
+  /** Which service holds `audio_key`. Absent means uploadthing, for compatibility. */
+  audio_provider?: Provider;
   content_hash: string;
   file_size?: number | null;
   mime_type?: string | null;
@@ -76,6 +79,7 @@ export interface IngestTrackPayload {
   cover_url?: string | null;
   cover_key?: string | null;
   cover_hash?: string | null;
+  cover_provider?: Provider | null;
 }
 
 /**
@@ -103,14 +107,17 @@ export async function commitTrack(
 /**
  * Delete a track and the storage it was holding.
  *
- * Two systems, and they cannot share a transaction — `UTApi.deleteFiles` is a
- * remote HTTP call. The database goes first deliberately. If the storage sweep
- * then fails, the outcome is an orphaned file wasting quota; the other ordering
- * would leave a row pointing at a file that no longer exists, which is a broken
- * player. A wasted megabyte beats a dead play button.
+ * Storage is a pool across two services now, so this partitions the keys the RPC
+ * surrendered and runs one sweep per provider. Neither can share a transaction
+ * with the database — both are remote HTTP calls — and the database still goes
+ * first deliberately. If a sweep then fails, the outcome is an orphaned file
+ * wasting quota; the other ordering would leave a row pointing at a file that no
+ * longer exists, which is a broken player. A wasted megabyte beats a dead play
+ * button, and two providers make partial failure likelier, not less.
  *
  * `delete_track` decides which keys are genuinely unreferenced — a cover is only
- * surrendered once its album has no tracks left.
+ * surrendered once its album has no tracks left — and tags each one with the
+ * service that holds it, so nothing here has to guess.
  */
 export async function deleteTrack(
   trackId: string,
@@ -123,20 +130,69 @@ export async function deleteTrack(
   const result = data as unknown as DeleteTrackResult;
   if (!result?.deleted) return { deleted: false, storageDeleted: 0 };
 
-  const keys = (result.keys ?? []).filter(Boolean);
+  const keys = normalizeKeys(result.keys);
   if (keys.length === 0) return { deleted: true, storageDeleted: 0 };
 
-  try {
-    const { deletedCount } = await new UTApi().deleteFiles(keys);
-    return { deleted: true, storageDeleted: deletedCount };
-  } catch (cause) {
-    // Reported, not thrown: the row is already gone, so the caller's UI should
-    // reflect a successful delete. `prune_orphans()` is the backstop for the
-    // files left behind.
-    return {
-      deleted: true,
-      storageDeleted: 0,
-      storageError: cause instanceof Error ? cause.message : 'storage cleanup failed',
-    };
+  let storageDeleted = 0;
+  const failures: string[] = [];
+
+  const uploadthing = keys.filter((entry) => entry.provider === 'uploadthing').map((e) => e.key);
+  if (uploadthing.length > 0) {
+    try {
+      const { deletedCount } = await new UTApi().deleteFiles(uploadthing);
+      storageDeleted += deletedCount;
+    } catch (cause) {
+      failures.push(cause instanceof Error ? cause.message : 'UploadThing cleanup failed');
+    }
   }
+
+  // One remove() per bucket — the API takes a path list, not a bucket-qualified one.
+  for (const bucket of ['audio', 'covers'] as Bucket[]) {
+    const paths = keys
+      .filter((entry) => entry.provider === 'supabase' && entry.bucket === bucket)
+      .map((entry) => entry.key);
+    if (paths.length === 0) continue;
+
+    const { data: removed, error: removeError } = await supabase.storage.from(bucket).remove(paths);
+    if (removeError) failures.push(`Supabase ${bucket}: ${removeError.message}`);
+    else storageDeleted += removed?.length ?? 0;
+  }
+
+  // Reported, not thrown: the row is already gone, so the caller's UI should
+  // reflect a successful delete. `prune_orphans()` is the backstop for the files
+  // left behind.
+  return failures.length > 0
+    ? { deleted: true, storageDeleted, storageError: failures.join('; ') }
+    : { deleted: true, storageDeleted };
+}
+
+/**
+ * Accept both key shapes.
+ *
+ * `delete_track` used to return a flat array of UploadThing keys, and rows
+ * committed before this migration are still described that way in any cached
+ * response. A bare string therefore means UploadThing — the only place a file
+ * could have been at the time.
+ */
+function normalizeKeys(raw: DeleteTrackResult['keys']): StorageKey[] {
+  const entries = (raw ?? []) as unknown[];
+  const keys: StorageKey[] = [];
+
+  for (const entry of entries) {
+    if (typeof entry === 'string' && entry) {
+      keys.push({ provider: 'uploadthing', bucket: 'audio', key: entry });
+      continue;
+    }
+    if (entry && typeof entry === 'object') {
+      const { provider, bucket, key } = entry as Record<string, unknown>;
+      if (typeof key !== 'string' || !key) continue;
+      keys.push({
+        provider: isProvider(provider) ? provider : 'uploadthing',
+        bucket: bucket === 'covers' ? 'covers' : 'audio',
+        key,
+      });
+    }
+  }
+
+  return keys;
 }

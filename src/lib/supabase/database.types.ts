@@ -55,6 +55,7 @@ export type Database = {
           artist_id: string
           cover_hash: string | null
           cover_key: string | null
+          cover_provider: string
           cover_url: string | null
           created_at: string
           id: string
@@ -66,6 +67,7 @@ export type Database = {
           artist_id: string
           cover_hash?: string | null
           cover_key?: string | null
+          cover_provider?: string
           cover_url?: string | null
           created_at?: string
           id?: string
@@ -77,6 +79,7 @@ export type Database = {
           artist_id?: string
           cover_hash?: string | null
           cover_key?: string | null
+          cover_provider?: string
           cover_url?: string | null
           created_at?: string
           id?: string
@@ -256,6 +259,7 @@ export type Database = {
           album_id: string | null
           artist_id: string
           audio_key: string
+          audio_provider: string
           audio_url: string
           bitrate: number | null
           codec: string | null
@@ -275,6 +279,7 @@ export type Database = {
           album_id?: string | null
           artist_id: string
           audio_key: string
+          audio_provider?: string
           audio_url: string
           bitrate?: number | null
           codec?: string | null
@@ -294,6 +299,7 @@ export type Database = {
           album_id?: string | null
           artist_id?: string
           audio_key?: string
+          audio_provider?: string
           audio_url?: string
           bitrate?: number | null
           codec?: string | null
@@ -332,6 +338,7 @@ export type Database = {
         Row: {
           album_artist_id: string | null
           album_artist_name: string | null
+          album_cover_provider: string | null
           album_cover_url: string | null
           album_id: string | null
           album_title: string | null
@@ -339,6 +346,7 @@ export type Database = {
           artist_id: string | null
           artist_name: string | null
           audio_key: string | null
+          audio_provider: string | null
           audio_url: string | null
           bitrate: number | null
           codec: string | null
@@ -400,6 +408,7 @@ export type Database = {
           p_artist_id: string
           p_cover_hash?: string
           p_cover_key?: string
+          p_cover_provider?: string
           p_cover_url?: string
           p_title: string
           p_year?: number

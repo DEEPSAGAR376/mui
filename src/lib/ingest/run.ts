@@ -11,10 +11,17 @@
  * Committing per track rather than after the batch means a failure at file 180 of
  * 200 leaves 179 tracks in the library, not zero. Combined with the RPC's
  * idempotency, re-running the same drop then picks up exactly where it stopped.
+ *
+ * Storage is a shared pool across two providers. UploadThing is filled first —
+ * it is the larger allowance and the better-worn path, so a library that fits in
+ * 2 GB never exercises the Supabase code at all. Only when a file no longer fits
+ * does the batch start routing to Supabase Storage.
  */
 
-import { uploadFiles } from '@/lib/uploadthing';
 import { commitTrack, type IngestTrackPayload } from '@/lib/actions/ingest';
+import { storageHeadroom } from '@/lib/actions/storage';
+import { objectPath, uploadOne } from '@/lib/storage/upload';
+import type { Provider } from '@/lib/storage/provider';
 import type { Candidate, CandidateStatus, CoverArt } from './types';
 
 export interface IngestHandlers {
@@ -31,6 +38,15 @@ export interface IngestSummary {
   coversUploaded: number;
   coversReused: number;
   bytesUploaded: number;
+  /** Where the batch's bytes actually went, for the finish line. */
+  bytesByProvider: Record<Provider, number>;
+}
+
+/** A cover the batch can point a track at, wherever it happens to live. */
+interface StoredCover {
+  url: string;
+  key: string;
+  provider: Provider;
 }
 
 const MIME_EXTENSIONS: Record<string, string> = {
@@ -46,8 +62,8 @@ const MIME_EXTENSIONS: Record<string, string> = {
  * Name the cover after its hash.
  *
  * Not cosmetic — it is how the upload result gets matched back to the album it
- * belongs to. `uploadFiles` returns an array, and relying on it being in request
- * order would be a silent correctness bug the first time it isn't.
+ * belongs to, and on the Supabase side it is also the object path, which makes
+ * an identical re-upload overwrite itself instead of accumulating copies.
  */
 function coverToFile(cover: CoverArt): File {
   const ext = MIME_EXTENSIONS[cover.mime.toLowerCase()] ?? 'jpg';
@@ -59,25 +75,81 @@ function coverToFile(cover: CoverArt): File {
 }
 
 /**
- * Upload every distinct cover the batch needs, and return a hash -> {url, key}
+ * Remaining headroom on each provider, drawn down as the batch proceeds.
+ *
+ * Fetched once per batch rather than per file — the numbers only move because of
+ * this batch, so a local tally is both cheaper and more accurate mid-run than
+ * re-asking a quota API that lags behind its own uploads.
+ */
+class Pool {
+  private free: Record<Provider, number | null> = { uploadthing: null, supabase: null };
+
+  static async open(): Promise<Pool> {
+    const pool = new Pool();
+    try {
+      for (const entry of await storageHeadroom()) {
+        pool.free[entry.provider] = entry.freeBytes;
+      }
+    } catch {
+      // Both stay null, which means "unknown" — see choose().
+    }
+    return pool;
+  }
+
+  /**
+   * Claim room for `bytes` and say who is holding it, or null if nobody can.
+   *
+   * Choosing and debiting in one synchronous step is deliberate: three workers
+   * run concurrently, and a check-then-upload-then-debit sequence would let all
+   * three pick the provider that only has room for one.
+   *
+   * A provider whose headroom is unknown (its API did not answer) is treated as
+   * available rather than full. Refusing to upload because a quota endpoint was
+   * briefly down would be a worse failure than overshooting a soft limit, and
+   * both providers enforce their own caps server-side regardless.
+   */
+  reserve(bytes: number): Provider | null {
+    for (const provider of ['uploadthing', 'supabase'] as const) {
+      const free = this.free[provider];
+      if (free === null) return provider;
+      if (free >= bytes) {
+        this.free[provider] = free - bytes;
+        return provider;
+      }
+    }
+    return null;
+  }
+
+  /** Hand the room back when the upload it was claimed for did not happen. */
+  refund(provider: Provider, bytes: number): void {
+    const free = this.free[provider];
+    if (free !== null) this.free[provider] = free + bytes;
+  }
+}
+
+/**
+ * Upload every distinct cover the batch needs, and return a hash -> StoredCover
  * map covering both the new uploads and the ones preflight already knew about.
  *
  * Deduplication happens on the hash, so twelve tracks sharing one embedded image
- * collapse to a single upload. This is the difference between 24 uploads and 13
- * for a normal album.
+ * collapse to a single upload. Covers already in the library are reused wherever
+ * they live — an album whose art sits in UploadThing is never re-uploaded to
+ * Supabase just because the new tracks are going there.
  */
 async function uploadCovers(
   candidates: Candidate[],
-  knownCovers: Record<string, { url: string; key: string }>,
+  knownCovers: Record<string, { url: string; key: string; provider?: Provider }>,
+  pool: Pool,
   handlers: IngestHandlers,
   signal?: AbortSignal,
-): Promise<{ map: Map<string, { url: string; key: string }>; uploaded: number; reused: number }> {
-  const map = new Map<string, { url: string; key: string }>();
+): Promise<{ map: Map<string, StoredCover>; uploaded: number; reused: number }> {
+  const map = new Map<string, StoredCover>();
   let reused = 0;
 
-  // Seed with what the server already has.
+  // Seed with what the server already has. A cover stored before providers
+  // existed is on UploadThing by definition.
   for (const [hash, value] of Object.entries(knownCovers)) {
-    map.set(hash, value);
+    map.set(hash, { url: value.url, key: value.key, provider: value.provider ?? 'uploadthing' });
   }
 
   const pending = new Map<string, CoverArt>();
@@ -98,16 +170,32 @@ async function uploadCovers(
   const files = [...pending.values()].map(coverToFile);
   handlers.onCoverProgress?.(0, files.length);
 
-  const results = await uploadFiles('coverUploader', { files, signal });
+  let uploaded = 0;
+  for (const file of files) {
+    if (signal?.aborted) break;
 
-  for (const result of results) {
-    // Match on the filename, which is the hash — see coverToFile.
-    const hash = result.name.replace(/\.[^.]+$/, '');
-    map.set(hash, { url: result.ufsUrl, key: result.key });
+    const provider = pool.reserve(file.size);
+    if (provider === null) {
+      // Out of room everywhere. Tracks still commit, just without artwork —
+      // audio is what the library is for.
+      console.error(`No storage headroom for cover ${file.name}; continuing without it.`);
+      continue;
+    }
+
+    // The filename IS the hash — see coverToFile.
+    const hash = file.name.replace(/\.[^.]+$/, '');
+    try {
+      const result = await uploadOne('covers', file, provider, {}, { key: file.name, signal });
+      map.set(hash, result);
+    } catch (cause) {
+      pool.refund(provider, file.size);
+      throw cause;
+    }
+    uploaded++;
+    handlers.onCoverProgress?.(uploaded, files.length);
   }
-  handlers.onCoverProgress?.(files.length, files.length);
 
-  return { map, uploaded: results.length, reused };
+  return { map, uploaded, reused };
 }
 
 /**
@@ -119,19 +207,28 @@ async function uploadCovers(
  */
 async function uploadAndCommit(
   candidate: Candidate,
-  covers: Map<string, { url: string; key: string }>,
+  covers: Map<string, StoredCover>,
+  pool: Pool,
   handlers: IngestHandlers,
   signal?: AbortSignal,
-): Promise<'committed' | 'duplicate' | 'failed'> {
+): Promise<{ outcome: 'committed' | 'duplicate' | 'failed'; provider?: Provider }> {
+  let provider: Provider | null = null;
   try {
+    provider = pool.reserve(candidate.fileSize);
+    if (provider === null) {
+      handlers.onStatus(candidate.id, 'error', 'storage full on both providers');
+      return { outcome: 'failed' };
+    }
+
     handlers.onStatus(candidate.id, 'uploading');
 
-    const [uploaded] = await uploadFiles('audioUploader', {
-      files: [candidate.file],
-      signal,
-      onUploadProgress: ({ progress }) => handlers.onProgress(candidate.id, progress),
-    });
-
+    const uploaded = await uploadOne(
+      'audio',
+      candidate.file,
+      provider,
+      { onProgress: (progress) => handlers.onProgress(candidate.id, progress) },
+      { key: objectPath(candidate.contentHash, candidate.file.name), signal },
+    );
     handlers.onStatus(candidate.id, 'committing');
 
     const cover = candidate.cover ? covers.get(candidate.cover.hash) : undefined;
@@ -146,8 +243,9 @@ async function uploadAndCommit(
       disc_no: candidate.discNo,
       duration_seconds: candidate.durationSeconds,
       genre: candidate.genre,
-      audio_url: uploaded.ufsUrl,
+      audio_url: uploaded.url,
       audio_key: uploaded.key,
+      audio_provider: uploaded.provider,
       content_hash: candidate.contentHash,
       file_size: candidate.fileSize,
       mime_type: candidate.mimeType,
@@ -156,16 +254,18 @@ async function uploadAndCommit(
       cover_url: cover?.url ?? null,
       cover_key: cover?.key ?? null,
       cover_hash: candidate.cover?.hash ?? null,
+      cover_provider: cover?.provider ?? null,
     };
 
     const result = await commitTrack(payload);
     handlers.onProgress(candidate.id, 100);
     handlers.onStatus(candidate.id, result.created ? 'done' : 'duplicate');
-    return result.created ? 'committed' : 'duplicate';
+    return { outcome: result.created ? 'committed' : 'duplicate', provider: uploaded.provider };
   } catch (cause) {
+    if (provider) pool.refund(provider, candidate.fileSize);
     const message = cause instanceof Error ? cause.message : 'upload failed';
     handlers.onStatus(candidate.id, 'error', message);
-    return 'failed';
+    return { outcome: 'failed' };
   }
 }
 
@@ -179,7 +279,7 @@ async function uploadAndCommit(
  */
 export async function runIngest(
   candidates: Candidate[],
-  knownCovers: Record<string, { url: string; key: string }>,
+  knownCovers: Record<string, { url: string; key: string; provider?: Provider }>,
   handlers: IngestHandlers,
   options: { concurrency?: number; signal?: AbortSignal } = {},
 ): Promise<IngestSummary> {
@@ -190,15 +290,18 @@ export async function runIngest(
     coversUploaded: 0,
     coversReused: 0,
     bytesUploaded: 0,
+    bytesByProvider: { uploadthing: 0, supabase: 0 },
   };
 
   if (candidates.length === 0) return summary;
 
+  const pool = await Pool.open();
+
   // Covers first and as a barrier: a track row references its cover's URL, so
   // there is nothing to gain from interleaving them.
-  let covers = new Map<string, { url: string; key: string }>();
+  let covers = new Map<string, StoredCover>();
   try {
-    const result = await uploadCovers(candidates, knownCovers, handlers, options.signal);
+    const result = await uploadCovers(candidates, knownCovers, pool, handlers, options.signal);
     covers = result.map;
     summary.coversUploaded = result.uploaded;
     summary.coversReused = result.reused;
@@ -217,10 +320,13 @@ export async function runIngest(
       if (options.signal?.aborted) return;
       const candidate = candidates[next++];
 
-      const outcome = await uploadAndCommit(candidate, covers, handlers, options.signal);
+      const { outcome, provider } = await uploadAndCommit(
+        candidate, covers, pool, handlers, options.signal,
+      );
       if (outcome === 'committed') {
         summary.committed++;
         summary.bytesUploaded += candidate.fileSize;
+        if (provider) summary.bytesByProvider[provider] += candidate.fileSize;
       } else if (outcome === 'duplicate') {
         summary.duplicates++;
       } else {

@@ -19,8 +19,8 @@ export default async function UploadPage() {
       ? Math.min(100, Math.round((quota.appTotalBytes / quota.limitBytes) * 100))
       : null;
 
-  // Bytes UploadThing is holding that no track row accounts for. Covers make the
-  // two numbers differ legitimately, so this is only a signal above the noise —
+  // Bytes the providers are holding that no track row accounts for. Covers make
+  // the two numbers differ legitimately, so this is only a signal above the noise —
   // `prune_orphans()` is what actually reconciles them.
   const unaccounted = quota ? quota.appTotalBytes - library.bytes : 0;
 
@@ -70,6 +70,19 @@ export default async function UploadPage() {
             {unaccounted > 1024 * 1024
               ? ` ${formatBytes(unaccounted)} is not accounted for by track rows — cover art plus anything orphaned by a deletion that failed its storage sweep.`
               : ''}
+          </p>
+          {/* The pool is two free tiers read as one ceiling, so the split is worth
+              showing: it says which side the next batch will land on, and a
+              provider that failed its lookup says so rather than reading as 0 B. */}
+          <p className="mt-1 text-xs text-muted-dim">
+            {quota.providers
+              .map((p) =>
+                p.unavailable
+                  ? `${p.provider}: unavailable`
+                  : `${p.provider}: ${formatBytes(p.usedBytes)} of ${formatBytes(p.limitBytes)}`,
+              )
+              .join(' · ')}
+            {quota.partial ? ' — totals are an undercount.' : ''}
           </p>
         </div>
       ) : null}

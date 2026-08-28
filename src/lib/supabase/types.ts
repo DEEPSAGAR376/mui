@@ -7,6 +7,7 @@
  */
 
 import type { Database, Tables } from './database.types';
+import type { Provider, StorageKey } from '@/lib/storage/provider';
 
 export type {
   Database,
@@ -51,7 +52,7 @@ export type TrackView = Omit<TrackViewRow, TrackViewRequired> & {
 /** Return shape of `ingest_preflight` — the hashes the server already has. */
 export interface PreflightResult {
   existing_tracks: string[];
-  known_covers: Record<string, { url: string; key: string }>;
+  known_covers: Record<string, { url: string; key: string; provider?: Provider }>;
 }
 
 /** Return shape of `ingest_track`. `created: false` means it was a duplicate. */
@@ -60,10 +61,16 @@ export interface IngestTrackResult {
   created: boolean;
 }
 
-/** Return shape of `delete_track` — `keys` are UploadThing keys to sweep. */
+/**
+ * Return shape of `delete_track`.
+ *
+ * `keys` are provider-tagged so the caller knows which service to sweep. Bare
+ * strings are the pre-shared-storage shape and mean UploadThing — the only place
+ * a file could have been at the time.
+ */
 export interface DeleteTrackResult {
   deleted: boolean;
-  keys: string[];
+  keys: (StorageKey | string)[];
 }
 
 /** Raw `tracks_view` row as the generator sees it — every column nullable. */

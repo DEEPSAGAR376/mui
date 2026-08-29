@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Inter, Sora } from 'next/font/google';
 import './globals.css';
 import { NowPlayingBackdrop } from '@/components/CoverBackdrop';
+import { ResourceHints } from '@/components/ResourceHints';
 import { SiteHeader } from '@/components/SiteHeader';
 import { LikesProvider } from '@/components/player/LikesProvider';
 import { PlayerBar } from '@/components/player/PlayerBar';
@@ -83,21 +84,35 @@ export const viewport: Viewport = {
  * The liked-track ids are read once here and handed to `LikesProvider`, so the
  * hundreds of hearts in a listing share one query instead of making one each.
  * Reading cookies makes every page dynamic — correct for a per-visitor library,
- * and the reason there is no static caching to reason about. It is also why the
- * `loading.tsx` files cannot cover the first paint: a `loading.tsx` wraps the page
- * and nested layouts, never the layout in its own segment, so navigation waits on
- * this `await` and on `isAdmin()` inside `SiteHeader`.
+ * and the reason there is no static caching to reason about.
+ *
+ * The promise is passed down **unawaited**, and that is the difference between a
+ * document that flushes immediately and one that waits on Supabase twice. This
+ * layout is nobody's `loading.tsx` — one wraps its segment's page and nested
+ * layouts, never the layout beside it — so an `await` here is dead time on every
+ * navigation with no skeleton allowed to cover it, and `likedTrackIds()` costs an
+ * `auth.getUser()` round trip before its own query. Handing the promise over
+ * instead means the shell, the header and the page's own skeleton all reach the
+ * browser first and the hearts fill in a frame later. `SiteHeader` does the same
+ * with `isAdmin()`, behind its own boundary.
+ *
+ * `.catch` here rather than in the provider: a rejected promise crossing the
+ * server/client boundary surfaces as an error where it is read, and an empty set
+ * of hearts is the right failure — the page must not fall over because a like
+ * lookup did.
  *
  * The skip link is the first tab stop and it exists because of the two fixed
  * surfaces: the header is sticky and the player bar is fixed, so without it every
  * route change means tabbing through the whole nav again to reach the list.
  */
-export default async function RootLayout({ children }: LayoutProps<'/'>) {
-  const liked = await likedTrackIds();
+export default function RootLayout({ children }: LayoutProps<'/'>) {
+  const liked = likedTrackIds().catch(() => [] as string[]);
 
   return (
     <html lang="en" className={`${inter.variable} ${sora.variable}`}>
       <body className="min-h-dvh">
+        <ResourceHints />
+
         <a
           href="#main"
           className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-full focus:bg-accent focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-ink-950"

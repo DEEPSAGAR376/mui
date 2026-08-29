@@ -6,8 +6,13 @@
  * The list is the queue: clicking row 5 of an album plays that album from track 5,
  * so "next" continues through what you were looking at. Passing a single track
  * would make every list a set of disconnected one-song queues.
+ *
+ * One `useCallback` serves every row rather than one closure per row, because
+ * `TrackRow` is memoised and a fresh `() => play(tracks, index)` per render would
+ * defeat it — see the note in that file.
  */
 
+import { useCallback } from 'react';
 import { MusicIcon, PlayIcon, ShuffleIcon } from '@/components/icons';
 import type { PlaylistOption } from '@/components/playlists/PlaylistPicker';
 import { Button } from '@/components/ui/Button';
@@ -30,6 +35,7 @@ export function TrackList({
   onRemove?: (trackId: string) => void;
 }) {
   const { current, isPlaying, play } = usePlayer();
+  const handlePlay = useCallback((index: number) => play(tracks, index), [play, tracks]);
 
   if (tracks.length === 0) {
     return (
@@ -51,8 +57,8 @@ export function TrackList({
             isCurrent={current?.id === track.id}
             isPlaying={isPlaying}
             showAlbum={showAlbum}
-            onPlay={() => play(tracks, index)}
-            onRemove={onRemove ? () => onRemove(track.id) : undefined}
+            onPlay={handlePlay}
+            onRemove={onRemove}
           />
         </li>
       ))}

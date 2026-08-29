@@ -11,11 +11,16 @@
  *
  * Each mount owns its own `scrub` state, which is correct rather than careless:
  * the sheet covers the bar, so only one of the two is ever on screen.
+ *
+ * This is also the only component in the app that renders the elapsed time, which
+ * is what makes `usePlayerTime()` worth having: `timeupdate` fires about four
+ * times a second, and subscribing to it separately from `usePlayer()` keeps that
+ * cadence from re-rendering the bar, the sheet, the queue and every library row.
  */
 
 import { useState } from 'react';
 import { formatDuration } from '@/lib/format';
-import { usePlayer } from './PlayerProvider';
+import { usePlayer, usePlayerTime } from './PlayerProvider';
 
 /** Feeds the `--fill` custom property that `.range` uses to colour the played part. */
 export function fillStyle(value: number, max: number): React.CSSProperties {
@@ -24,7 +29,8 @@ export function fillStyle(value: number, max: number): React.CSSProperties {
 }
 
 export function Scrubber({ variant = 'bar' }: { variant?: 'bar' | 'sheet' }) {
-  const { currentTime, duration, seek } = usePlayer();
+  const currentTime = usePlayerTime();
+  const { duration, seek } = usePlayer();
   /** Non-null only while the slider is being dragged. */
   const [scrub, setScrub] = useState<number | null>(null);
 

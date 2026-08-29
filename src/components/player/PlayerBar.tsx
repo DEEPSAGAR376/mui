@@ -16,10 +16,10 @@
  */
 
 import Image from 'next/image';
-import { motion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 import {
   MusicIcon,
+  SpinnerIcon,
   PauseIcon,
   PlayIcon,
   RepeatIcon,
@@ -32,21 +32,27 @@ import {
 } from '@/components/icons';
 import { IconButton } from './IconButton';
 import { LikeButton } from './LikeButton';
-import { COVER_MORPH_ID, NowPlaying, useCoverMorph } from './NowPlaying';
+import { NowPlaying } from './NowPlaying';
 import { usePlayer } from './PlayerProvider';
 import { Scrubber, fillStyle } from './Scrubber';
 
 export function PlayerBar() {
   const player = usePlayer();
-  const { current, currentTime, isPlaying, volume, muted, shuffle, repeat } = player;
+  const { current, isPlaying, volume, muted, shuffle, repeat } = player;
 
   const [expanded, setExpanded] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const morph = useCoverMorph();
+  /** Measured by the morph as the flight's other end. Never animated from here. */
+  const barCoverRef = useRef<HTMLSpanElement>(null);
 
   // Keyboard shortcuts, guarded against firing while someone is typing — the
   // upload screen is full of text inputs, and space is a legal character in all
   // of them.
+  //
+  // Seeking goes through `seekBy` rather than `seek(currentTime ± 5)`, which is
+  // what lets this component stay off the four-times-a-second time context: the
+  // bar re-rendered on every `timeupdate` purely to keep that one number fresh
+  // for two key handlers.
   //
   // This needs no adjustment for the sheet, which is worth stating rather than
   // leaving to look like an oversight: keydowns from inside a modal dialog still
@@ -74,9 +80,9 @@ export function PlayerBar() {
       } else if (event.key === 'ArrowLeft' && event.shiftKey) {
         player.previous();
       } else if (event.key === 'ArrowRight') {
-        player.seek(currentTime + 5);
+        player.seekBy(5);
       } else if (event.key === 'ArrowLeft') {
-        player.seek(currentTime - 5);
+        player.seekBy(-5);
       } else if (event.key.toLowerCase() === 'm') {
         player.toggleMute();
       }
@@ -84,7 +90,7 @@ export function PlayerBar() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [currentTime, player]);
+  }, [player]);
 
   // Nothing playing and nothing restored: no bar, and no dead space where one
   // would have been.
@@ -92,10 +98,10 @@ export function PlayerBar() {
 
   /**
    * Opened here, imperatively, rather than from an effect inside `NowPlaying`.
-   * `motion` measures the sheet's cover to find the morph target, and a dialog
-   * that is still `display: none` at measurement time measures 0x0 — the cover
-   * then flies out of the viewport corner. Calling `showModal()` in the handler
-   * puts the dialog in the top layer before React re-renders at all.
+   * The morph measures the sheet's cover to find where the flight ends, and a
+   * dialog that is still `display: none` at measurement time measures 0x0 — the
+   * cover then launches from the viewport corner. Calling `showModal()` in the
+   * handler puts the dialog in the top layer before React re-renders at all.
    */
   const openSheet = () => {
     const dialog = dialogRef.current;
@@ -118,10 +124,10 @@ export function PlayerBar() {
               container as the artwork and the title, and making that container the
               expand trigger would have nested a button inside a button. */}
           <div className="flex min-w-0 flex-1 items-center gap-3">
-            {/* No `overflow-hidden` here. The artwork is the element that morphs
-                into the sheet's full-size cover, and it travels far outside this
-                box on the way — a clip on the button would sever the animation.
-                The rounding and the clip live on the motion element instead. */}
+            {/* The thumbnail inside is the far end of the cover morph: the sheet
+                measures it and flies its own cover down onto this box. Nothing
+                here moves, so the clip and the rounding can live on the inner
+                span, where they belong anyway. */}
             <button
               type="button"
               onClick={openSheet}
@@ -130,29 +136,30 @@ export function PlayerBar() {
               title="Open now playing"
               className="relative size-12 shrink-0 rounded-lg transition-transform duration-fast hover:scale-[1.04] sm:size-16"
             >
-              {/* Mounted only while collapsed. Two live elements sharing one
-                  `layoutId` makes the older a follower projected onto the newer
-                  box, which paints a stretched copy of this thumbnail at full
-                  size behind the sheet. */}
-              {expanded ? null : (
-                <motion.span
-                  layoutId={COVER_MORPH_ID}
-                  transition={morph}
-                  className="absolute inset-0 block overflow-hidden rounded-lg bg-ink-800 shadow-lift"
-                >
-                  {current.album_cover_url ? (
-                    <Image
-                      src={current.album_cover_url}
-                      alt=""
-                      fill
-                      sizes="56px"
-                      className="object-cover"
-                    />
-                  ) : (
-                    <MusicIcon className="absolute inset-0 m-auto size-5 text-muted-dim" />
-                  )}
-                </motion.span>
-              )}
+              {/* Hidden while expanded, never unmounted, and the difference
+                  matters twice: `visibility: hidden` keeps the layout box, so the
+                  collapse still has somewhere to measure and fly back down to, and
+                  a window resize with the sheet open re-measures correctly instead
+                  of aiming at a stale rectangle. `display: none` would give up
+                  both. */}
+              <span
+                ref={barCoverRef}
+                className={`absolute inset-0 block overflow-hidden rounded-lg bg-ink-800 shadow-lift ${
+                  expanded ? 'invisible' : ''
+                }`}
+              >
+                {current.album_cover_url ? (
+                  <Image
+                    src={current.album_cover_url}
+                    alt=""
+                    fill
+                    sizes="56px"
+                    className="object-cover"
+                  />
+                ) : (
+                  <MusicIcon className="absolute inset-0 m-auto size-5 text-muted-dim" />
+                )}
+              </span>
             </button>
 
             <button
@@ -163,12 +170,22 @@ export function PlayerBar() {
               className="min-w-0 flex-1 text-left"
             >
               <span className="block truncate text-sm font-medium text-white">{current.title}</span>
-              <span className="block truncate text-xs text-muted">
-                {current.artist_name}
-                {current.album_title ? (
-                  <span className="text-muted-dim"> · {current.album_title}</span>
-                ) : null}
-              </span>
+              {/* The failure takes the subtitle's place rather than adding a
+                  row, so a dead track cannot change the bar's height while it is
+                  fixed over the page. `role="status"` announces it once without
+                  stealing focus from whatever the listener was doing. */}
+              {player.failed ? (
+                <span role="status" className="block truncate text-xs text-danger">
+                  Couldn&rsquo;t play this one — skip, or try again
+                </span>
+              ) : (
+                <span className="block truncate text-xs text-muted">
+                  {current.artist_name}
+                  {current.album_title ? (
+                    <span className="text-muted-dim"> · {current.album_title}</span>
+                  ) : null}
+                </span>
+              )}
             </button>
 
             <LikeButton trackId={current.id} className="hidden shrink-0 sm:block" />
@@ -191,7 +208,15 @@ export function PlayerBar() {
                 title={isPlaying ? 'Pause' : 'Play'}
                 className="flex size-10 items-center justify-center rounded-full bg-white text-ink-950 shadow-glow transition-transform duration-fast hover:scale-105 active:scale-95"
               >
-                {isPlaying ? (
+                {/* Buffering wins over the play/pause glyph, because the store's
+                    first byte can take a second or more and a button that has
+                    already flipped to "pause" over silence reads as broken. The
+                    label deliberately stays "Pause": the control still pauses,
+                    and renaming it mid-wait would move the goalposts for anyone
+                    listening to it. */}
+                {player.stalled && isPlaying ? (
+                  <SpinnerIcon className="size-4" />
+                ) : isPlaying ? (
                   <PauseIcon className="size-4" />
                 ) : (
                   <PlayIcon className="size-4 translate-x-px" />
@@ -245,7 +270,12 @@ export function PlayerBar() {
         </div>
       </div>
 
-      <NowPlaying dialogRef={dialogRef} open={expanded} onClose={() => setExpanded(false)} />
+      <NowPlaying
+        dialogRef={dialogRef}
+        peerRef={barCoverRef}
+        open={expanded}
+        onClose={() => setExpanded(false)}
+      />
     </>
   );
 }

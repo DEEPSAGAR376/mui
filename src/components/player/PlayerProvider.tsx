@@ -39,7 +39,19 @@ interface PlayerApi {
   /** Which slot of `order` is playing. The panel highlights on this, not on id. */
   position: number;
   isPlaying: boolean;
-  currentTime: number;
+  /**
+   * Waiting on bytes while it wants to be playing.
+   *
+   * Worth its own flag because the store's first byte takes 1-3s: without it the
+   * play button flips to "pause" and then nothing audible happens, which reads as
+   * a broken player rather than a slow one.
+   */
+  stalled: boolean;
+  /**
+   * The current track would not start at all -- a dead URL, an unsupported
+   * container, a network failure. Distinct from `stalled`, which resolves itself.
+   */
+  failed: boolean;
   duration: number;
   volume: number;
   muted: boolean;
@@ -55,6 +67,12 @@ interface PlayerApi {
   /** Play a given slot of `order`, leaving the order itself alone. */
   jumpTo: (orderPosition: number) => void;
   seek: (seconds: number) => void;
+  /**
+   * Relative seek. Exists so that callers do not have to read `currentTime` —
+   * see the note on the two contexts below. The element's own clock is the input,
+   * which is also more accurate than state sampled four times a second.
+   */
+  seekBy: (delta: number) => void;
   setVolume: (value: number) => void;
   toggleMute: () => void;
   toggleShuffle: () => void;
@@ -65,10 +83,54 @@ interface PlayerApi {
 
 const PlayerContext = createContext<PlayerApi | null>(null);
 
+/**
+ * Elapsed seconds, deliberately in a context of its own.
+ *
+ * `timeupdate` fires about four times a second, so while a track plays this value
+ * changes constantly. Carrying it inside `PlayerApi` meant a new context value
+ * four times a second, and therefore a re-render of every consumer four times a
+ * second: the bar, the sheet, the queue panel, the blurred backdrop and every row
+ * in the library — none of which display the time.
+ *
+ * Two providers, one component. `<audio>` is rendered by the same component and
+ * its element identity is untouched, which is the constraint that outranks all of
+ * this. `children` is the same element object on a time-only re-render, so React
+ * skips the whole subtree and only actual `usePlayerTime()` consumers run. Today
+ * that is `Scrubber` alone.
+ */
+const PlayerTimeContext = createContext(0);
+
 export function usePlayer(): PlayerApi {
   const context = useContext(PlayerContext);
   if (!context) throw new Error('usePlayer must be used inside <PlayerProvider>');
   return context;
+}
+
+/** Elapsed seconds. Re-renders on every `timeupdate` — see `PlayerTimeContext`. */
+export function usePlayerTime(): number {
+  return useContext(PlayerTimeContext);
+}
+
+/** How long into a track to start pulling the next one down. */
+const WARM_AFTER_MS = 8_000;
+
+/**
+ * Whether to speculatively fetch audio that has not been asked for.
+ *
+ * `saveData` is an explicit request not to spend the user's bytes, and on 2G a
+ * speculative megabyte competes with the track that is actually playing. The API
+ * is Chromium-only; absent means there is no reason to hold back.
+ */
+function shouldWarm(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const connection = (
+    navigator as Navigator & {
+      connection?: { saveData?: boolean; effectiveType?: string };
+    }
+  ).connection;
+  if (!connection) return true;
+  if (connection.saveData) return false;
+  return connection.effectiveType !== 'slow-2g' && connection.effectiveType !== '2g';
 }
 
 /** Fisher-Yates over indices, with `first` pulled to the front if given. */
@@ -100,6 +162,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [position, setPosition] = useState(0);
 
   const [isPlaying, setIsPlaying] = useState(false);
+  const [stalled, setStalled] = useState(false);
+  const [failed, setFailed] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolumeState] = useState(1);
@@ -184,23 +248,74 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
    */
   const wantPlayRef = useRef(false);
 
+  /**
+   * Start the element, and classify a rejection instead of swallowing it.
+   *
+   * `play()` rejects for two unrelated reasons that need opposite treatment.
+   * `NotAllowedError` means the browser wants a user gesture first -- nothing is
+   * wrong with the track, so settling back to paused is the whole correct
+   * response. Anything else means the media would not start, and that has to be
+   * visible: every one of these calls used to `catch(() => setIsPlaying(false))`,
+   * which made a dead URL and a deliberate pause the same picture.
+   *
+   * The `readyState` check is why it is a helper rather than a `catch`. Marking
+   * the wait *before* asking is what lets the button show a spinner during the
+   * second or more it takes the store to hand over a first byte, rather than
+   * claiming to play in silence.
+   */
+  const startAudio = useCallback((audio: HTMLAudioElement) => {
+    setFailed(false);
+    if (audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) setStalled(true);
+    void audio.play().catch((err: unknown) => {
+      setIsPlaying(false);
+      setStalled(false);
+      if (!(err instanceof DOMException) || err.name !== 'NotAllowedError') setFailed(true);
+    });
+  }, []);
+
+  /**
+   * Point the element at a track, and start it if asked.
+   *
+   * Extracted so that a click can do this *synchronously, inside the gesture*
+   * rather than waiting for the effect below to notice the new `current`.
+   * `setQueue`/`setPosition` only take effect after the commit, so the old
+   * ordering put a React render between the tap and the first byte being asked
+   * for. Against a store whose first byte takes over a second that ordering is
+   * worth the small duplication — and starting playback inside the gesture is
+   * also what keeps mobile autoplay policies satisfied.
+   *
+   * The `dataset.trackId` guard is what makes the two callers idempotent: whoever
+   * gets there second finds the element already pointed at the right track and
+   * only resumes it.
+   */
+  const loadTrack = useCallback((track: TrackView, autoplay: boolean) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (audio.dataset.trackId !== track.id) {
+      audio.dataset.trackId = track.id;
+      audio.src = track.audio_url;
+      audio.load();
+      setCurrentTime(0);
+      setFailed(false);
+    }
+
+    if (autoplay) startAudio(audio);
+  }, [startAudio]);
+
   // Load whichever track is current. Keyed on the id, not the object: the queue
   // array is rebuilt on every shuffle toggle, and re-running this on identity
   // change would restart the track under the user.
+  //
+  // Still needed even though `play`, `playShuffled` and `jumpTo` all load eagerly:
+  // `next()`, `previous()` and `ended` move the cursor through `advance()` without
+  // knowing the destination, so for those this effect is the load.
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !current) return;
     if (audio.dataset.trackId === current.id) return;
-
-    audio.dataset.trackId = current.id;
-    audio.src = current.audio_url;
-    audio.load();
-    setCurrentTime(0);
-
-    if (wantPlayRef.current) {
-      void audio.play().catch(() => setIsPlaying(false));
-    }
-  }, [current]);
+    loadTrack(current, wantPlayRef.current);
+  }, [current, loadTrack]);
 
   // Element events. Re-attached when `repeat`/`advance` change so `ended` always
   // closes over the current mode.
@@ -242,14 +357,35 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const onEnded = () => {
       if (repeat === 'one') {
         audio.currentTime = 0;
-        void audio.play().catch(() => setIsPlaying(false));
+        startAudio(audio);
         return;
       }
       advance(1);
     };
 
     const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
+    const onPause = () => {
+      setIsPlaying(false);
+      // Pausing mid-buffer ends the wait as far as the UI is concerned.
+      setStalled(false);
+    };
+
+    /**
+     * `waiting` covers both starts and mid-track rebuffers; `stalled` fires when
+     * the network has gone quiet for long enough that the browser gives up
+     * expecting data. `playing` is the only reliable all-clear -- `canplay` can
+     * arrive while the element is still not advancing.
+     */
+    const onWaiting = () => setStalled(true);
+    const onPlaying = () => {
+      setStalled(false);
+      setFailed(false);
+    };
+    const onError = () => {
+      setStalled(false);
+      setFailed(true);
+      setIsPlaying(false);
+    };
 
     audio.addEventListener('timeupdate', onTime);
     audio.addEventListener('loadedmetadata', onMeta);
@@ -257,6 +393,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     audio.addEventListener('ended', onEnded);
     audio.addEventListener('play', onPlay);
     audio.addEventListener('pause', onPause);
+    audio.addEventListener('waiting', onWaiting);
+    audio.addEventListener('stalled', onWaiting);
+    audio.addEventListener('playing', onPlaying);
+    audio.addEventListener('error', onError);
 
     return () => {
       audio.removeEventListener('timeupdate', onTime);
@@ -265,8 +405,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       audio.removeEventListener('ended', onEnded);
       audio.removeEventListener('play', onPlay);
       audio.removeEventListener('pause', onPause);
+      audio.removeEventListener('waiting', onWaiting);
+      audio.removeEventListener('stalled', onWaiting);
+      audio.removeEventListener('playing', onPlaying);
+      audio.removeEventListener('error', onError);
     };
-  }, [advance, current, repeat]);
+  }, [advance, current, repeat, startAudio]);
 
   const play = useCallback(
     (tracks: TrackView[], startIndex = 0) => {
@@ -288,15 +432,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         setPosition(start);
       }
 
-      // Clicking the track that is already loaded (paused, or restored from
-      // localStorage) leaves `current` unchanged, so the load effect above will
-      // not fire. Start it here instead of appearing to ignore the click.
-      const audio = audioRef.current;
-      if (audio && audio.dataset.trackId === tracks[start].id) {
-        void audio.play().catch(() => setIsPlaying(false));
-      }
+      // Load inside the click rather than waiting for the state above to commit
+      // and the effect to notice. Two things fall out of that: the first byte is
+      // requested a render earlier, which is worth having against a store whose
+      // TTFB is ~1s, and clicking the track that is *already* loaded (paused, or
+      // restored from localStorage) still starts it — `current` does not change
+      // there, so the effect would never fire and the click would look ignored.
+      loadTrack(tracks[start], true);
     },
-    [shuffle],
+    [loadTrack, shuffle],
   );
 
   /**
@@ -306,34 +450,34 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
    * would read the pre-toggle value of `shuffle` in the same handler, and the
    * queue would come out in album order with the button showing shuffle on.
    */
-  const playShuffled = useCallback((tracks: TrackView[]) => {
-    if (tracks.length === 0) return;
-    const start = Math.floor(Math.random() * tracks.length);
+  const playShuffled = useCallback(
+    (tracks: TrackView[]) => {
+      if (tracks.length === 0) return;
+      const start = Math.floor(Math.random() * tracks.length);
 
-    wantPlayRef.current = true;
-    pendingSeekRef.current = null;
-    setQueue(tracks);
-    setOrder(shuffledOrder(tracks.length, start));
-    setPosition(0);
-    setShuffle(true);
+      wantPlayRef.current = true;
+      pendingSeekRef.current = null;
+      setQueue(tracks);
+      setOrder(shuffledOrder(tracks.length, start));
+      setPosition(0);
+      setShuffle(true);
 
-    const audio = audioRef.current;
-    if (audio && audio.dataset.trackId === tracks[start].id) {
-      void audio.play().catch(() => setIsPlaying(false));
-    }
-  }, []);
+      loadTrack(tracks[start], true);
+    },
+    [loadTrack],
+  );
 
   const toggle = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || !current) return;
     if (audio.paused) {
       wantPlayRef.current = true;
-      void audio.play().catch(() => setIsPlaying(false));
+      startAudio(audio);
     } else {
       wantPlayRef.current = false;
       audio.pause();
     }
-  }, [current]);
+  }, [current, startAudio]);
 
   const next = useCallback(() => {
     wantPlayRef.current = true;
@@ -373,7 +517,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         // *before* the `pendingSeekRef` line below, so a track restored from
         // localStorage still starts at its saved offset rather than at zero.
         const audio = audioRef.current;
-        if (audio?.paused) void audio.play().catch(() => setIsPlaying(false));
+        if (audio?.paused) startAudio(audio);
         return;
       }
 
@@ -381,8 +525,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // whichever track is being jumped to.
       pendingSeekRef.current = null;
       setPosition(orderPosition);
+
+      // And point the element at it now, in the click, rather than a render later.
+      const track = queue[order[orderPosition]];
+      if (track) loadTrack(track, true);
     },
-    [order.length, position],
+    [loadTrack, order, position, queue, startAudio],
   );
 
   const seek = useCallback((seconds: number) => {
@@ -395,6 +543,23 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     // waiting for the next `timeupdate`.
     setCurrentTime(clamped);
   }, []);
+
+  /**
+   * Relative seek, reading the element's own clock rather than React state.
+   *
+   * This is what lets `currentTime` leave `PlayerApi` — the keyboard shortcuts in
+   * `PlayerBar` were the only other reader, and they wanted "five seconds from
+   * here", not the number itself. It is also strictly more accurate: state is
+   * sampled four times a second, the element is exact.
+   */
+  const seekBy = useCallback(
+    (delta: number) => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      seek(audio.currentTime + delta);
+    },
+    [seek],
+  );
 
   const setVolume = useCallback((value: number) => {
     const clamped = Math.min(1, Math.max(0, value));
@@ -482,7 +647,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         'play',
         () => {
           wantPlayRef.current = true;
-          void audioRef.current?.play().catch(() => setIsPlaying(false));
+          const audio = audioRef.current;
+          if (audio) startAudio(audio);
         },
       ],
       [
@@ -519,7 +685,72 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }
       }
     };
-  }, [isPlaying, next, previous, seek]);
+  }, [isPlaying, next, previous, seek, startAudio]);
+
+  /**
+   * Whatever `advance(1)` would land on — the track to warm, and nothing else
+   * uses it. Mirrors `advance`'s wrapping exactly: one past the end is the top of
+   * the order under `repeat: 'all'`, and the end of the road otherwise.
+   */
+  const upcoming = useMemo<TrackView | null>(() => {
+    if (order.length === 0) return null;
+    const slot = position + 1;
+    if (slot < order.length) return queue[order[slot]] ?? null;
+    return repeat === 'all' ? (queue[order[0]] ?? null) : null;
+  }, [order, position, queue, repeat]);
+
+  const warmRef = useRef<HTMLAudioElement | null>(null);
+
+  /**
+   * Pull the next track down before it is asked for.
+   *
+   * This is the single biggest latency win available on this app, and it is worth
+   * being explicit about why: the store answers in ~1s regardless of how many
+   * bytes are wanted, but it does send `Cache-Control: public, max-age=86400`.
+   * So the first request for a file is slow and every request for the rest of the
+   * day is a disk-cache hit. Warming moves that one slow request off the moment
+   * the user is waiting on and into the middle of the previous track.
+   *
+   * A detached `new Audio()` rather than `<link rel="preload" as="audio">`: the
+   * link has a different request mode and can end up with a cache entry the media
+   * element will not reuse. This mirrors what the real element does byte for byte
+   * — same `preload`, and deliberately **no `crossOrigin`**, because a bare
+   * `<audio src>` is a no-CORS credentialed fetch and setting it here would make
+   * a second, unusable cache entry.
+   *
+   * Started `WARM_AFTER_MS` in, so it competes with nothing: by then the current
+   * track has its own buffer and the connection to the host is already open.
+   */
+  useEffect(() => {
+    if (!isPlaying || !upcoming) return;
+    // `repeat: 'one'` never advances, so there is nothing to warm.
+    if (repeat === 'one') return;
+    if (warmRef.current?.dataset.url === upcoming.audio_url) return;
+    if (!shouldWarm()) return;
+
+    const timer = window.setTimeout(() => {
+      // Drop the previous warm target only now, inside the timer, not on every
+      // re-run: when a track ends, the thing being dropped is the file that just
+      // started playing, and cancelling that fetch a frame after the handover is
+      // exactly the wrong moment. Eight seconds later it is harmless.
+      const previous = warmRef.current;
+      if (previous) {
+        previous.removeAttribute('src');
+        previous.load();
+      }
+
+      const warm = new Audio();
+      warm.preload = 'auto';
+      warm.dataset.url = upcoming.audio_url;
+      warm.src = upcoming.audio_url;
+      warm.load();
+      warmRef.current = warm;
+    }, WARM_AFTER_MS);
+
+    // Only the timer is unwound. An in-flight warm fetch is left to finish —
+    // pausing is not a reason to throw away bytes already paid for.
+    return () => window.clearTimeout(timer);
+  }, [isPlaying, repeat, upcoming]);
 
   const value = useMemo<PlayerApi>(
     () => ({
@@ -529,7 +760,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       order,
       position,
       isPlaying,
-      currentTime,
+      stalled,
+      failed,
       // Before `loadedmetadata` lands, fall back to the duration the database
       // already knows, so the scrubber has a length on the very first paint.
       duration: duration || current?.duration_seconds || 0,
@@ -544,6 +776,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       previous,
       jumpTo,
       seek,
+      seekBy,
       setVolume,
       toggleMute,
       toggleShuffle,
@@ -557,7 +790,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       order,
       position,
       isPlaying,
-      currentTime,
+      stalled,
+      failed,
       duration,
       volume,
       muted,
@@ -570,6 +804,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       previous,
       jumpTo,
       seek,
+      seekBy,
       setVolume,
       toggleMute,
       toggleShuffle,
@@ -580,10 +815,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <PlayerContext.Provider value={value}>
-      {children}
-      {/* preload="metadata": enough for a duration, without pulling a 60MB FLAC
-          that may never be played. */}
-      <audio ref={audioRef} preload="metadata" />
+      <PlayerTimeContext.Provider value={currentTime}>
+        {children}
+        {/* preload="metadata": enough for a duration, without pulling a 60MB FLAC
+            that may never be played. */}
+        <audio ref={audioRef} preload="metadata" />
+      </PlayerTimeContext.Provider>
     </PlayerContext.Provider>
   );
 }

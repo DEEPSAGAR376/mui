@@ -13,7 +13,7 @@
  * is a single UPDATE rather than a renumber of everything below it.
  */
 
-import { useState, useTransition } from 'react';
+import { useCallback, useState, useTransition } from 'react';
 import {
   DndContext,
   KeyboardSensor,
@@ -54,8 +54,8 @@ function SortableRow({
   playlists: PlaylistOption[];
   isCurrent: boolean;
   isPlaying: boolean;
-  onPlay: () => void;
-  onRemove: () => void;
+  onPlay: (index: number) => void;
+  onRemove: (trackId: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } =
     useSortable({ id: track.id });
@@ -141,20 +141,25 @@ export function SortableTrackList({
     });
   };
 
-  const remove = (trackId: string) => {
-    const previous = items;
-    setItems((prev) => prev.filter((item) => item.id !== trackId));
-    setError(null);
+  const handlePlay = useCallback((index: number) => play(items, index), [items, play]);
 
-    startTransition(async () => {
-      try {
-        await removeFromPlaylist(playlistId, trackId);
-      } catch (cause) {
-        setItems(previous);
-        setError(cause instanceof Error ? cause.message : 'Could not remove that track.');
-      }
-    });
-  };
+  const remove = useCallback(
+    (trackId: string) => {
+      const previous = items;
+      setItems((prev) => prev.filter((item) => item.id !== trackId));
+      setError(null);
+
+      startTransition(async () => {
+        try {
+          await removeFromPlaylist(playlistId, trackId);
+        } catch (cause) {
+          setItems(previous);
+          setError(cause instanceof Error ? cause.message : 'Could not remove that track.');
+        }
+      });
+    },
+    [items, playlistId],
+  );
 
   if (items.length === 0) {
     return (
@@ -176,7 +181,7 @@ export function SortableTrackList({
               playlists={playlists}
               isCurrent={current?.id === track.id}
               isPlaying={isPlaying}
-              onPlay={() => play(items, index)}
+              onPlay={handlePlay}
             />
           </li>
         ))}
@@ -204,8 +209,8 @@ export function SortableTrackList({
                 playlists={playlists}
                 isCurrent={current?.id === track.id}
                 isPlaying={isPlaying}
-                onPlay={() => play(items, index)}
-                onRemove={() => remove(track.id)}
+                onPlay={handlePlay}
+                onRemove={remove}
               />
             ))}
           </ul>

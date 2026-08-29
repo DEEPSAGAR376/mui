@@ -23,27 +23,29 @@
  * ## Why `dialogRef` is a prop
  *
  * `showModal()` is called by `PlayerBar`, **synchronously in the click handler**,
- * before React re-renders. That ordering is not stylistic. `motion` measures the
- * sheet's cover to work out where the morph should land; if the dialog were
- * opened from an effect instead, the measurement would happen while it was still
- * `display: none`, the box would be 0×0, and the cover would fly out of the
- * viewport corner. React also runs layout effects child-before-parent, so a
- * parent-owned effect is always too late to fix it. Hoisting the ref to the
- * caller makes that guarantee visible at the call site.
+ * before React re-renders. That ordering is not stylistic. The morph measures the
+ * sheet's cover to work out where the flight starts, and a dialog that is still
+ * `display: none` at measurement time measures 0×0 — the cover would launch from
+ * the viewport corner. Opening it in the handler puts it in the top layer before
+ * React renders at all. Hoisting the ref to the caller is what makes that
+ * guarantee visible at the call site.
  *
- * Closing goes the other way, through state: the sheet's content unmounts first,
- * which is what leaves `motion` a measured box to fly the bar's artwork back
- * down from.
+ * ## Why closing is asynchronous
+ *
+ * Collapsing cannot simply flip `open` to false: that unmounts the cover, and
+ * there is then nothing left to fly back down. So `requestClose` runs the exit
+ * animation first and calls `onClose` when it finishes. Every route out of the
+ * sheet — the chevron, Escape, the backdrop — goes through it.
  */
 
 import Image from 'next/image';
-import { motion, useReducedMotion, type Transition } from 'motion/react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CoverBackdrop } from '@/components/CoverBackdrop';
 import {
   ChevronDownIcon,
   MusicIcon,
   PauseIcon,
+  SpinnerIcon,
   PlayIcon,
   QueueIcon,
   RepeatIcon,
@@ -57,46 +59,62 @@ import type { TrackView } from '@/lib/supabase/types';
 import { IconButton } from './IconButton';
 import { LevelMeter } from './LevelMeter';
 import { LikeButton } from './LikeButton';
+import { morphSheetIn, morphSheetOut } from './coverMorph';
 import { usePlayer } from './PlayerProvider';
 import { Scrubber } from './Scrubber';
-
-/**
- * The shared-element id the bar's artwork and the sheet's cover pair on. Exactly
- * one of the two may be mounted at a time: two live elements sharing a
- * `layoutId` makes the older one a follower, projected onto the newer one's box,
- * which paints a stretched duplicate of the 56px thumbnail at full size.
- */
-export const COVER_MORPH_ID = 'np-cover';
-
-/**
- * Morph timing, matching `--transition-duration-sheet` and `--ease-glide` so the
- * flight and the CSS around it agree.
- *
- * The reduced-motion lever in `globals.css` cannot reach this: it works by
- * overriding `--default-transition-duration`, which every `transition-*` utility
- * reads, and a `layoutId` morph is driven from JavaScript instead. Hence the
- * hook.
- */
-export function useCoverMorph(): Transition {
-  const reduce = useReducedMotion();
-  return reduce ? { duration: 0 } : { duration: 0.32, ease: [0.32, 0.72, 0, 1] };
-}
 
 type NowPlayingProps = {
   /** Owned by `PlayerBar` — see the note on ordering above. */
   dialogRef: React.RefObject<HTMLDialogElement | null>;
+  /** The bar's artwork: the other half of the morph, measured but never touched. */
+  peerRef: React.RefObject<HTMLElement | null>;
   open: boolean;
   onClose: () => void;
 };
 
-export function NowPlaying({ dialogRef, open, onClose }: NowPlayingProps) {
+export function NowPlaying({ dialogRef, peerRef, open, onClose }: NowPlayingProps) {
+  const coverRef = useRef<HTMLDivElement | null>(null);
+  /** Re-entry guard: Escape twice, or Escape during the chevron's own collapse. */
+  const closingRef = useRef(false);
+
   // The dialog is permanently mounted and only its *content* is conditional, so
   // that `showModal()` always has an element to call.
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog || open) return;
     if (dialog.open) dialog.close();
+    // Only now that it has left the top layer, so the backdrop does not flash
+    // back to full opacity for a frame on the way out.
+    dialog.classList.remove('is-closing');
   }, [dialogRef, open]);
+
+  /**
+   * `useLayoutEffect`, so the flight starts before the browser has painted the
+   * sheet at its final size — an ordinary effect runs after paint and the first
+   * frame would be a snap.
+   *
+   * Safe on the server despite the usual warning: `PlayerBar` returns `null`
+   * until there is a current track, and that only comes from `localStorage` in an
+   * effect, so this component never renders during SSR.
+   */
+  useLayoutEffect(() => {
+    if (!open) return;
+    morphSheetIn(dialogRef.current, coverRef.current, peerRef.current);
+  }, [dialogRef, open, peerRef]);
+
+  const requestClose = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    const dialog = dialogRef.current;
+    // Fades the `::backdrop`, which `element.animate()` cannot reach — see the
+    // `dialog` rules in `globals.css`.
+    dialog?.classList.add('is-closing');
+
+    void morphSheetOut(dialog, coverRef.current, peerRef.current).then((finished) => {
+      closingRef.current = false;
+      if (finished) onClose();
+    });
+  }, [dialogRef, onClose, peerRef]);
 
   useEffect(() => {
     if (!open) return;
@@ -116,12 +134,12 @@ export function NowPlaying({ dialogRef, open, onClose }: NowPlayingProps) {
       // truth for open/closed.
       onCancel={(event) => {
         event.preventDefault();
-        onClose();
+        requestClose();
       }}
       onClose={onClose}
       className="m-0 h-dvh max-h-none w-full max-w-none rounded-none border-0 bg-transparent p-0 text-fg outline-none backdrop:bg-ink-950/70 backdrop:backdrop-blur-sm"
     >
-      {open ? <Sheet onCollapse={onClose} /> : null}
+      {open ? <Sheet coverRef={coverRef} onCollapse={requestClose} /> : null}
     </dialog>
   );
 }
@@ -129,15 +147,20 @@ export function NowPlaying({ dialogRef, open, onClose }: NowPlayingProps) {
 /**
  * The sheet body, mounted only while open.
  *
- * Rendered as a child of the dialog rather than as the dialog itself so that
- * unmounting it — on collapse — is what triggers the reverse morph, a frame
- * before the dialog leaves the top layer.
+ * Rendered as a child of the dialog rather than as the dialog itself so that the
+ * dialog can stay in the top layer, at a stable size, while the content animates
+ * in and out of it.
  */
-function Sheet({ onCollapse }: { onCollapse: () => void }) {
+function Sheet({
+  coverRef,
+  onCollapse,
+}: {
+  coverRef: React.RefObject<HTMLDivElement | null>;
+  onCollapse: () => void;
+}) {
   const player = usePlayer();
   const { current, isPlaying, shuffle, repeat } = player;
   const [queueOpen, setQueueOpen] = useState(false);
-  const morph = useCoverMorph();
 
   if (!current) return null;
 
@@ -189,10 +212,9 @@ function Sheet({ onCollapse }: { onCollapse: () => void }) {
             {/* No `overflow-hidden` on any ancestor of the morphing element: the
                 cover flies well outside this box on the way down to the bar, and
                 a clip anywhere above it would cut the animation in half. The
-                rounding lives on the motion element itself for the same reason. */}
-            <motion.div
-              layoutId={COVER_MORPH_ID}
-              transition={morph}
+                rounding lives on the element itself for the same reason. */}
+            <div
+              ref={coverRef}
               className="relative aspect-square w-[min(58vh,26rem,80vw)] shrink-0 overflow-hidden rounded-2xl bg-ink-800 shadow-lift"
             >
               {current.album_cover_url ? (
@@ -206,7 +228,7 @@ function Sheet({ onCollapse }: { onCollapse: () => void }) {
               ) : (
                 <MusicIcon className="absolute inset-0 m-auto size-16 text-muted-dim" />
               )}
-            </motion.div>
+            </div>
 
             <div className="w-full max-w-xl shrink-0 text-center">
               <h2 className="font-display text-display font-semibold text-balance text-white lg:text-hero">
@@ -219,6 +241,15 @@ function Sheet({ onCollapse }: { onCollapse: () => void }) {
                 ) : null}
                 {year ? <span className="text-muted-dim"> · {year}</span> : null}
               </p>
+
+              {/* Additive here rather than replacing the line, unlike the bar:
+                  there is room, and the artist is worth keeping on screen. */}
+              {player.failed ? (
+                <p role="status" className="mt-2 text-sm text-danger">
+                  Couldn&rsquo;t play this one. The file may be missing — skip to the
+                  next track, or press play to retry.
+                </p>
+              ) : null}
 
               {/* `genre` rides on every view row and nothing else in the app
                   renders it. Capped at four, because ingest reads whatever the
@@ -256,7 +287,9 @@ function Sheet({ onCollapse }: { onCollapse: () => void }) {
                   title={isPlaying ? 'Pause' : 'Play'}
                   className="mx-1 flex size-16 items-center justify-center rounded-full bg-white text-ink-950 shadow-glow transition-transform duration-fast hover:scale-105 active:scale-95"
                 >
-                  {isPlaying ? (
+                  {player.stalled && isPlaying ? (
+                    <SpinnerIcon className="size-6" />
+                  ) : isPlaying ? (
                     <PauseIcon className="size-6" />
                   ) : (
                     <PlayIcon className="size-6 translate-x-0.5" />

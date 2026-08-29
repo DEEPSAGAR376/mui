@@ -17,7 +17,7 @@
  * `<div>`: the list semantics live in `TrackList`, which is a real `ul`/`li`.
  */
 
-import { useState, useTransition } from 'react';
+import { useCallback, useState, useTransition } from 'react';
 import { deleteTrack } from '@/lib/actions/ingest';
 import { formatBytes, plural } from '@/lib/format';
 import { TrackList } from '@/components/player/TrackList';
@@ -34,13 +34,26 @@ export function TrackAdminList({
 }) {
   const [rows, setRows] = useState(tracks);
   const [pending, startTransition] = useTransition();
-  const [confirming, setConfirming] = useState<TrackView | null>(null);
+  /**
+   * The id under confirmation, and the row derived back from it below rather than
+   * held. Storing the object would mean `confirmRemove` had to look it up, giving
+   * that callback a dependency on `rows` — which changes on every delete, so every
+   * memoised row in the list would take a fresh `onRemove` identity and re-render
+   * for nothing. From an id the callback captures a state setter and no more.
+   */
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const bytes = rows.reduce((total, row) => total + (row.file_size ?? 0), 0);
+  // No id matches no row, so the null case needs no branch of its own.
+  const confirming = rows.find((row) => row.id === confirmingId) ?? null;
+
+  // Stable, so the memoised rows below can skip re-rendering — an inline arrow
+  // here would be a new prop identity for every row on every keystroke of state.
+  const confirmRemove = useCallback((trackId: string) => setConfirmingId(trackId), []);
 
   const remove = (track: TrackView) => {
-    setConfirming(null);
+    setConfirmingId(null);
     setNotice(null);
 
     startTransition(async () => {
@@ -83,10 +96,7 @@ export function TrackAdminList({
         tracks={rows}
         playlists={playlists}
         emptyMessage="The library is empty. Drop a folder on the upload screen."
-        onRemove={(trackId) => {
-          const track = rows.find((row) => row.id === trackId);
-          if (track) setConfirming(track);
-        }}
+        onRemove={confirmRemove}
       />
 
       <ConfirmDialog
@@ -95,7 +105,7 @@ export function TrackAdminList({
         confirmLabel="Delete"
         pending={pending}
         onConfirm={() => confirming && remove(confirming)}
-        onCancel={() => setConfirming(null)}
+        onCancel={() => setConfirmingId(null)}
       >
         {confirming ? (
           <>

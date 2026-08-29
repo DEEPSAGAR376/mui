@@ -219,6 +219,42 @@
 }
 
 /*
+ * The now-playing sheet's scrim.
+ *
+ * `::backdrop` is the one part of the sheet's animation that JavaScript cannot
+ * drive. `element.animate()` takes an element, and its `pseudoElement` option
+ * reaches `::before` / `::after` — not the top layer's backdrop. So the scrim is
+ * CSS, and both directions have to be stated separately because a modal
+ * `<dialog>` is toggling `display` underneath:
+ *
+ *  - `@starting-style` supplies the "before it was shown" value. Without it there
+ *    is no previous value to transition *from* — the element goes straight from
+ *    not-rendered to rendered and the fade never runs.
+ *  - `.is-closing`, added by `requestClose()`, covers the exit. `close()` removes
+ *    the backdrop from the top layer in the same frame, so the fade has to happen
+ *    while the dialog is still open and `close()` waits for it.
+ *
+ * The colour stays at the call site (`backdrop:bg-ink-950/70`); this is opacity
+ * and timing only. The reduced-motion sweep above cannot match a pseudo-element,
+ * which is precisely why the duration is a token — the token override there is
+ * what neutralises this.
+ */
+dialog::backdrop {
+  opacity: 1;
+  transition: opacity var(--transition-duration-sheet) var(--ease-glide);
+}
+
+@starting-style {
+  dialog[open]::backdrop {
+    opacity: 0;
+  }
+}
+
+dialog.is-closing::backdrop {
+  opacity: 0;
+}
+
+/*
  * Range inputs.
  *
  * The scrubber and volume slider are real `<input type="range">` elements rather

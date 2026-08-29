@@ -7,13 +7,20 @@
  * per button would be one request per row; this loads the set once (server-side,
  * passed in as `initialLiked`) and keeps it in a context that the buttons read.
  *
+ * That set arrives as a promise rather than an array, so the document does not
+ * wait on it — the hearts start empty and fill a frame after paint. The read is
+ * an effect and not `use()` on purpose, and the reason is playback: `use()`
+ * suspends, this provider's nearest boundary is the root layout, and a fallback
+ * swap there would unmount `PlayerProvider`'s `<audio>` mid-track. An effect
+ * cannot suspend anything.
+ *
  * The anonymous session is created HERE, on the first like — never on page load.
  * `signInAnonymously()` writes a real `auth.users` row, so calling it while
  * someone merely browses would let every crawler mint one, and Supabase counts
  * those toward monthly active users.
  */
 
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { ensureSession } from '@/lib/supabase/client';
 import { toggleLike } from '@/lib/actions/likes';
 
@@ -37,11 +44,33 @@ export function LikesProvider({
   initialLiked,
   children,
 }: {
-  initialLiked: string[];
+  /** Unawaited by the root layout, and already `.catch`ed there, so it cannot reject. */
+  initialLiked: Promise<string[]>;
   children: React.ReactNode;
 }) {
-  const [liked, setLiked] = useState<Set<string>>(() => new Set(initialLiked));
+  const [liked, setLiked] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+
+    initialLiked.then(
+      (ids) => {
+        // A union rather than a replace: these ids are what the server knew when
+        // the request began, and a heart tapped in the meantime must not be undone
+        // by them arriving. The length check keeps the common case — no session, no
+        // likes — from costing a render for nothing.
+        if (live && ids.length > 0) setLiked((prev) => new Set([...ids, ...prev]));
+      },
+      // Unreachable today; here so a future caller that forgets the layout's
+      // `.catch` gets an empty set instead of an unhandled rejection.
+      () => {},
+    );
+
+    return () => {
+      live = false;
+    };
+  }, [initialLiked]);
 
   const toggle = useCallback(async (trackId: string) => {
     setError(null);

@@ -31,9 +31,24 @@
  * The root is a `<div>` rather than an `<li>` on purpose: both lists that render
  * it supply the `<ul>`/`<li>`, and the sortable one needs its `<li>` to also hold
  * the drag handle — which must sit *outside* this row's click area.
+ *
+ * ## Why it is memoised, and why the callbacks look like this
+ *
+ * A library page renders 30-odd of these, each with its own `next/image`, and the
+ * list above it consumes `usePlayer()` — so it re-renders on every volume nudge,
+ * every shuffle toggle, every track change. Without `memo` that is the whole
+ * library re-rendering while you drag the volume slider.
+ *
+ * `memo` only bites if every prop is referentially stable, which is what forces
+ * `onPlay(index)` and `onRemove(trackId)` to hand back what the row already
+ * knows. The obvious signature — `onPlay: () => void` — makes the caller write
+ * `onPlay={() => play(tracks, index)}`, a fresh function per row per render, and
+ * `memo` then compares unequal every single time and buys nothing. Passing the
+ * index back lets a list keep one `useCallback` for all of its rows.
  */
 
 import Image from 'next/image';
+import { memo } from 'react';
 import { MusicIcon, PlayIcon, TrashIcon } from '@/components/icons';
 import { formatDuration } from '@/lib/format';
 import { PlaylistPicker, type PlaylistOption } from '@/components/playlists/PlaylistPicker';
@@ -41,7 +56,7 @@ import type { TrackView } from '@/lib/supabase/types';
 import { LevelMeter } from './LevelMeter';
 import { LikeButton } from './LikeButton';
 
-export function TrackRow({
+export const TrackRow = memo(function TrackRow({
   track,
   index,
   playlists,
@@ -57,9 +72,10 @@ export function TrackRow({
   isCurrent: boolean;
   isPlaying: boolean;
   showAlbum?: boolean;
-  onPlay: () => void;
+  /** Takes the row's own index so the caller can keep one stable callback. */
+  onPlay: (index: number) => void;
   /** Present only on playlist pages, where a row can be taken out again. */
-  onRemove?: () => void;
+  onRemove?: (trackId: string) => void;
 }) {
   return (
     <div
@@ -100,7 +116,7 @@ export function TrackRow({
             ancestor, so this one button is the hit area for the whole row. */}
         <button
           type="button"
-          onClick={onPlay}
+          onClick={() => onPlay(index)}
           className={`block w-full truncate text-left text-sm before:absolute before:inset-0 before:rounded-lg ${
             isCurrent ? 'font-medium text-accent-bright' : 'text-white'
           }`}
@@ -125,7 +141,7 @@ export function TrackRow({
         {onRemove ? (
           <button
             type="button"
-            onClick={onRemove}
+            onClick={() => onRemove(track.id)}
             aria-label={`Remove ${track.title} from this playlist`}
             title="Remove from this playlist"
             className="rounded-full p-1.5 text-muted-dim transition-colors duration-fast hover:text-danger"
@@ -140,4 +156,4 @@ export function TrackRow({
       </span>
     </div>
   );
-}
+});

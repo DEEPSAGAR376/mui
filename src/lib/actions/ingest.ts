@@ -18,6 +18,7 @@
  * convenience, never the boundary.
  */
 
+import { revalidatePath } from 'next/cache';
 import { UTApi } from 'uploadthing/server';
 import { createClient } from '@/lib/supabase/server';
 import { isProvider, type Bucket, type Provider, type StorageKey } from '@/lib/storage/provider';
@@ -105,6 +106,30 @@ export async function commitTrack(
 }
 
 /**
+ * Drop the cached listings after the library changes.
+ *
+ * Both pages read the whole library and neither had any invalidation before. A
+ * fresh upload only appeared because the client router cache had a zero-second
+ * window and every navigation refetched; `next.config.ts` now holds dynamic
+ * segments for 30s, which would turn that accident into a stale list.
+ *
+ * Deliberately **not** called from `commitTrack`. A mass upload commits once per
+ * file, three at a time, and a Server Action that revalidates makes the client
+ * refetch the RSC payload for the route it was called from -- so a 30-file batch
+ * meant 30 mid-flight refreshes of `/admin/upload`, each re-running `isAdmin()`
+ * and the page's own queries while files were still uploading. The review grid
+ * stuttered and the progress bars crawled for no gain at all, because
+ * `UploadManager` already calls `router.refresh()` once when the batch resolves
+ * and that clears the whole client router cache. Deletion is different -- one
+ * action, one call, and nothing else refreshes afterwards.
+ */
+function revalidateListings() {
+  revalidatePath('/');
+  revalidatePath('/search');
+  revalidatePath('/admin/tracks');
+}
+
+/**
  * Delete a track and the storage it was holding.
  *
  * Storage is a pool across two services now, so this partitions the keys the RPC
@@ -129,6 +154,8 @@ export async function deleteTrack(
 
   const result = data as unknown as DeleteTrackResult;
   if (!result?.deleted) return { deleted: false, storageDeleted: 0 };
+
+  revalidateListings();
 
   const keys = normalizeKeys(result.keys);
   if (keys.length === 0) return { deleted: true, storageDeleted: 0 };

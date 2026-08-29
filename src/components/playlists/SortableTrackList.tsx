@@ -32,10 +32,11 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripIcon } from '@/components/icons';
+import { GripIcon, MusicIcon } from '@/components/icons';
 import { TrackRow } from '@/components/player/TrackRow';
 import { usePlayer } from '@/components/player/PlayerProvider';
 import type { PlaylistOption } from '@/components/playlists/PlaylistPicker';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { movePlaylistTrack, removeFromPlaylist } from '@/lib/actions/playlists';
 import type { TrackView } from '@/lib/supabase/types';
 
@@ -60,7 +61,7 @@ function SortableRow({
     useSortable({ id: track.id });
 
   return (
-    <div
+    <li
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={`flex items-center gap-1 ${isDragging ? 'relative z-10 opacity-80' : ''}`}
@@ -89,7 +90,7 @@ function SortableRow({
           onRemove={onRemove}
         />
       </div>
-    </div>
+    </li>
   );
 }
 
@@ -157,28 +158,29 @@ export function SortableTrackList({
 
   if (items.length === 0) {
     return (
-      <p className="rounded-lg border border-dashed border-ink-700 px-4 py-10 text-center text-sm text-muted-dim">
+      <EmptyState icon={<MusicIcon className="size-6" />}>
         Empty. Add tracks from the library with the + button on any row.
-      </p>
+      </EmptyState>
     );
   }
 
   // Read-only view: no handles, no remove buttons, same rows.
   if (!canEdit) {
     return (
-      <div className="flex flex-col">
+      <ul className="flex flex-col divide-y divide-hairline">
         {items.map((track, index) => (
-          <TrackRow
-            key={track.id}
-            track={track}
-            index={index}
-            playlists={playlists}
-            isCurrent={current?.id === track.id}
-            isPlaying={isPlaying}
-            onPlay={() => play(items, index)}
-          />
+          <li key={track.id}>
+            <TrackRow
+              track={track}
+              index={index}
+              playlists={playlists}
+              isCurrent={current?.id === track.id}
+              isPlaying={isPlaying}
+              onPlay={() => play(items, index)}
+            />
+          </li>
         ))}
-      </div>
+      </ul>
     );
   }
 
@@ -193,7 +195,7 @@ export function SortableTrackList({
         onDragEnd={onDragEnd}
       >
         <SortableContext items={items.map((item) => item.id)} strategy={verticalListSortingStrategy}>
-          <div className="flex flex-col">
+          <ul className="flex flex-col">
             {items.map((track, index) => (
               <SortableRow
                 key={track.id}
@@ -206,7 +208,7 @@ export function SortableTrackList({
                 onRemove={() => remove(track.id)}
               />
             ))}
-          </div>
+          </ul>
         </SortableContext>
       </DndContext>
     </div>

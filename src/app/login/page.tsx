@@ -7,8 +7,14 @@
  * because it verifies the signature locally instead of trusting a cookie.
  */
 
+import type { Metadata } from 'next';
 import { AuthPanel } from '@/components/AuthPanel';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { createClient, isAdmin } from '@/lib/supabase/server';
+
+export const metadata: Metadata = {
+  title: 'Account',
+};
 
 export default async function LoginPage({ searchParams }: PageProps<'/login'>) {
   const { error } = await searchParams;
@@ -22,13 +28,10 @@ export default async function LoginPage({ searchParams }: PageProps<'/login'>) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-white">Account</h1>
-        <p className="mt-1 text-sm text-muted">
-          Listening needs no account at all. This page exists so a guest session can
-          become a permanent one without losing anything.
-        </p>
-      </div>
+      <PageHeader
+        title="Account"
+        subtitle="Listening needs no account at all. This page exists so a guest session can become a permanent one without losing anything."
+      />
 
       {typeof error === 'string' && error ? (
         <p className="max-w-lg rounded-lg border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">

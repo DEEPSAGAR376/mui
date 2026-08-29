@@ -7,12 +7,21 @@
  * from a playlist it is not recoverable: `delete_track` drops the row and then
  * the audio file is swept out of UploadThing storage. The confirmation names the
  * track so a mis-click on a dense list is caught before it costs anything.
+ *
+ * That confirmation used to be an inline banner rendered above the list, which on
+ * a two-thousand-row library put the warning several screens away from the row you
+ * clicked and left focus behind on the row. It is a modal `ConfirmDialog` now —
+ * see that file for why the native `<dialog>` is doing the work.
+ *
+ * The wrapper below is a layout stack, not a list, and deliberately stays a
+ * `<div>`: the list semantics live in `TrackList`, which is a real `ul`/`li`.
  */
 
 import { useState, useTransition } from 'react';
 import { deleteTrack } from '@/lib/actions/ingest';
 import { formatBytes, plural } from '@/lib/format';
 import { TrackList } from '@/components/player/TrackList';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import type { PlaylistOption } from '@/components/playlists/PlaylistPicker';
 import type { TrackView } from '@/lib/supabase/types';
 
@@ -62,34 +71,13 @@ export function TrackAdminList({
         click, same as anywhere else.
       </p>
 
-      {confirming ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-danger/40 bg-danger/10 px-4 py-3">
-          <p className="text-sm text-white">
-            Delete <span className="font-medium">{confirming.title}</span> by{' '}
-            {confirming.artist_name}? The audio file is removed from storage too. Cover
-            art is kept until the album has no tracks left.
-          </p>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setConfirming(null)}
-              className="rounded-md border border-ink-700 px-3 py-1.5 text-sm text-muted transition-colors hover:text-white"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => remove(confirming)}
-              className="rounded-md bg-danger px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              Delete
-            </button>
-          </div>
-        </div>
+      {/* `aria-live` because the outcome arrives after the dialog has closed and
+          focus has gone back to a row — nothing would otherwise announce it. */}
+      {notice ? (
+        <p aria-live="polite" className="text-sm text-muted-dim">
+          {notice}
+        </p>
       ) : null}
-
-      {notice ? <p className="text-sm text-muted-dim">{notice}</p> : null}
 
       <TrackList
         tracks={rows}
@@ -100,6 +88,23 @@ export function TrackAdminList({
           if (track) setConfirming(track);
         }}
       />
+
+      <ConfirmDialog
+        open={confirming !== null}
+        title="Delete this track?"
+        confirmLabel="Delete"
+        pending={pending}
+        onConfirm={() => confirming && remove(confirming)}
+        onCancel={() => setConfirming(null)}
+      >
+        {confirming ? (
+          <>
+            <span className="font-medium text-white">{confirming.title}</span> by{' '}
+            {confirming.artist_name} will be removed from the library, and its audio file
+            from storage. Cover art is kept until the album has no tracks left.
+          </>
+        ) : null}
+      </ConfirmDialog>
     </div>
   );
 }

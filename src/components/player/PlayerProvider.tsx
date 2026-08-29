@@ -31,6 +31,13 @@ interface PlayerApi {
   current: TrackView | null;
   /** Index into `queue`, not into the shuffled play order. */
   currentIndex: number;
+  /**
+   * The play order: indices into `queue`, identity when shuffle is off. Exposed
+   * so the queue panel can list what actually plays next rather than album order.
+   */
+  order: number[];
+  /** Which slot of `order` is playing. The panel highlights on this, not on id. */
+  position: number;
   isPlaying: boolean;
   currentTime: number;
   duration: number;
@@ -45,6 +52,8 @@ interface PlayerApi {
   toggle: () => void;
   next: () => void;
   previous: () => void;
+  /** Play a given slot of `order`, leaving the order itself alone. */
+  jumpTo: (orderPosition: number) => void;
   seek: (seconds: number) => void;
   setVolume: (value: number) => void;
   toggleMute: () => void;
@@ -344,6 +353,38 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     advance(-1);
   }, [advance]);
 
+  /**
+   * Jump straight to a slot of the play order — what a click in the queue panel
+   * means.
+   *
+   * Deliberately *not* `play(queue, order[orderPosition])`: that re-enters
+   * `play()`'s `if (shuffle)` branch and reshuffles everything after the clicked
+   * track, so the queue the user was looking at rearranges itself under the
+   * click. `setPosition` is the whole mechanism, exactly as `next()` uses it.
+   */
+  const jumpTo = useCallback(
+    (orderPosition: number) => {
+      if (orderPosition < 0 || orderPosition >= order.length) return;
+      wantPlayRef.current = true;
+
+      if (orderPosition === position) {
+        // Same slot: `current` never changes, so the load effect will not fire
+        // and this would otherwise be a dead click. Resume instead — and return
+        // *before* the `pendingSeekRef` line below, so a track restored from
+        // localStorage still starts at its saved offset rather than at zero.
+        const audio = audioRef.current;
+        if (audio?.paused) void audio.play().catch(() => setIsPlaying(false));
+        return;
+      }
+
+      // A jump taken right after a restore must not apply the restored offset to
+      // whichever track is being jumped to.
+      pendingSeekRef.current = null;
+      setPosition(orderPosition);
+    },
+    [order.length, position],
+  );
+
   const seek = useCallback((seconds: number) => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -485,6 +526,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       queue,
       current,
       currentIndex,
+      order,
+      position,
       isPlaying,
       currentTime,
       // Before `loadedmetadata` lands, fall back to the duration the database
@@ -499,6 +542,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       toggle,
       next,
       previous,
+      jumpTo,
       seek,
       setVolume,
       toggleMute,
@@ -510,6 +554,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       queue,
       current,
       currentIndex,
+      order,
+      position,
       isPlaying,
       currentTime,
       duration,
@@ -522,6 +568,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       toggle,
       next,
       previous,
+      jumpTo,
       seek,
       setVolume,
       toggleMute,

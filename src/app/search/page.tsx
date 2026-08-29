@@ -9,12 +9,21 @@
  * The results are the queue, exactly as on the library page.
  */
 
+import type { Metadata } from 'next';
 import Form from 'next/form';
 import { SearchIcon } from '@/components/icons';
 import { PlayAllButtons, TrackList } from '@/components/player/TrackList';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { myPlaylists } from '@/lib/actions/playlists';
 import { SEARCH_LIMIT, searchTracks, type SearchResult } from '@/lib/data/tracks';
 import { plural } from '@/lib/format';
+
+export const metadata: Metadata = {
+  title: 'Search',
+  description: 'Search the library by title, artist or album.',
+};
 
 const EMPTY: SearchResult = { tracks: [], terms: [] };
 
@@ -39,19 +48,12 @@ export default async function SearchPage({ searchParams }: PageProps<'/search'>)
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight text-white">Search</h1>
-          <p className="mt-1 text-sm text-muted">{subtitle}</p>
-        </div>
-
-        <PlayAllButtons tracks={tracks} />
-      </div>
+      <PageHeader title="Search" subtitle={subtitle} actions={<PlayAllButtons tracks={tracks} />} />
 
       <Form action="/search" className="flex items-center gap-2">
         <div className="relative min-w-0 flex-1 sm:max-w-md">
           <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-dim" />
-          <input
+          <Input
             name="q"
             type="search"
             defaultValue={raw}
@@ -59,15 +61,12 @@ export default async function SearchPage({ searchParams }: PageProps<'/search'>)
             autoComplete="off"
             aria-label="Search titles, artists and albums"
             placeholder="Titles, artists, albums"
-            className="w-full rounded-full border border-ink-700 bg-ink-900 py-2 pr-4 pl-9 text-sm outline-none transition-colors focus:border-accent"
+            className="w-full pl-9"
           />
         </div>
-        <button
-          type="submit"
-          className="shrink-0 rounded-full bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-bright"
-        >
+        <Button type="submit" variant="primary">
           Search
-        </button>
+        </Button>
       </Form>
 
       {asked ? (

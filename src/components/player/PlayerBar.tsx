@@ -1,18 +1,23 @@
 'use client';
 
 /**
- * The bar at the bottom of every page.
+ * The bar at the bottom of every page, and the trigger for the expanded
+ * now-playing sheet.
  *
  * Rendered from the root layout, next to `PlayerProvider`, so it survives
  * navigation along with the audio element it controls. It holds no playback state
- * of its own — everything comes from `usePlayer()` — with one exception: while the
- * position slider is being dragged, the thumb follows the pointer instead of the
- * track, and the seek is committed on release rather than on every pixel of
- * movement.
+ * of its own — everything comes from `usePlayer()` — with one exception:
+ * open/closed for the sheet lives here rather than in the provider, so expanding
+ * the view never re-renders `PlayerProvider` and therefore can never disturb the
+ * `<audio>` element.
+ *
+ * The drag-in-progress position that used to live here moved into `Scrubber`,
+ * which the sheet reuses.
  */
 
 import Image from 'next/image';
-import { useEffect, useState } from 'react';
+import { motion } from 'motion/react';
+import { useEffect, useRef, useState } from 'react';
 import {
   MusicIcon,
   PauseIcon,
@@ -25,53 +30,31 @@ import {
   VolumeIcon,
   VolumeMutedIcon,
 } from '@/components/icons';
-import { formatDuration } from '@/lib/format';
+import { IconButton } from './IconButton';
 import { LikeButton } from './LikeButton';
+import { COVER_MORPH_ID, NowPlaying, useCoverMorph } from './NowPlaying';
 import { usePlayer } from './PlayerProvider';
-
-/** Feeds the `--fill` custom property that `.range` uses to colour the played part. */
-function fillStyle(value: number, max: number): React.CSSProperties {
-  const percent = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
-  return { '--fill': `${percent}%` } as React.CSSProperties;
-}
-
-function IconButton({
-  label,
-  active,
-  onClick,
-  children,
-}: {
-  label: string;
-  active?: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-      aria-pressed={active}
-      className={`rounded-full p-2 transition-colors ${
-        active ? 'text-accent-bright' : 'text-muted hover:text-white'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
+import { Scrubber, fillStyle } from './Scrubber';
 
 export function PlayerBar() {
   const player = usePlayer();
-  const { current, duration, currentTime, isPlaying, volume, muted, shuffle, repeat } = player;
+  const { current, currentTime, isPlaying, volume, muted, shuffle, repeat } = player;
 
-  /** Non-null only while the position slider is being dragged. */
-  const [scrub, setScrub] = useState<number | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const morph = useCoverMorph();
 
   // Keyboard shortcuts, guarded against firing while someone is typing — the
   // upload screen is full of text inputs, and space is a legal character in all
   // of them.
+  //
+  // This needs no adjustment for the sheet, which is worth stating rather than
+  // leaving to look like an oversight: keydowns from inside a modal dialog still
+  // bubble to `window`, so Space keeps toggling playback; Escape closes the
+  // dialog and then matches nothing here; and the guard list below already means
+  // arrows on the sheet's scrubber move the slider instead of also seeking, and
+  // Space on the sheet's play button activates the button instead of toggling
+  // twice. Do not weaken that list.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -107,132 +90,162 @@ export function PlayerBar() {
   // would have been.
   if (!current) return null;
 
-  const shown = scrub ?? currentTime;
-
-  const commitScrub = () => {
-    if (scrub === null) return;
-    player.seek(scrub);
-    setScrub(null);
+  /**
+   * Opened here, imperatively, rather than from an effect inside `NowPlaying`.
+   * `motion` measures the sheet's cover to find the morph target, and a dialog
+   * that is still `display: none` at measurement time measures 0x0 — the cover
+   * then flies out of the viewport corner. Calling `showModal()` in the handler
+   * puts the dialog in the top layer before React re-renders at all.
+   */
+  const openSheet = () => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+    setExpanded(true);
   };
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-ink-700 bg-ink-900/85 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-7xl items-center gap-3 px-3 py-2.5 sm:gap-4 sm:px-4">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <div className="relative size-12 shrink-0 overflow-hidden rounded-md bg-ink-800 sm:size-14">
-            {current.album_cover_url ? (
-              <Image
-                src={current.album_cover_url}
-                alt=""
-                fill
-                sizes="56px"
-                className="object-cover"
-              />
-            ) : (
-              <MusicIcon className="absolute inset-0 m-auto size-5 text-muted-dim" />
-            )}
-          </div>
+    <>
+      <div className="glass fixed inset-x-0 bottom-0 z-40">
+        {/* The lit top edge. A border would be a flat line across the full width;
+            this reads as the bar catching light from the middle outwards. */}
+        <div
+          aria-hidden="true"
+          className="absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-accent/50 to-transparent"
+        />
 
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-white">{current.title}</p>
-            <p className="truncate text-xs text-muted">
-              {current.artist_name}
-              {current.album_title ? (
-                <span className="text-muted-dim"> · {current.album_title}</span>
-              ) : null}
-            </p>
-          </div>
-
-          <LikeButton trackId={current.id} className="hidden shrink-0 sm:block" />
-        </div>
-
-        <div className="flex flex-[1.4] flex-col items-center gap-0.5">
-          <div className="flex items-center gap-1 sm:gap-2">
-            <IconButton label="Shuffle" active={shuffle} onClick={player.toggleShuffle}>
-              <ShuffleIcon className="size-4" />
-            </IconButton>
-
-            <IconButton label="Previous track" onClick={player.previous}>
-              <SkipBackIcon className="size-5" />
-            </IconButton>
-
+        <div className="mx-auto flex max-w-7xl items-center gap-3 px-3 py-2.5 sm:gap-4 sm:px-4">
+          {/* Three siblings, not two: `LikeButton` used to sit inside the same
+              container as the artwork and the title, and making that container the
+              expand trigger would have nested a button inside a button. */}
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            {/* No `overflow-hidden` here. The artwork is the element that morphs
+                into the sheet's full-size cover, and it travels far outside this
+                box on the way — a clip on the button would sever the animation.
+                The rounding and the clip live on the motion element instead. */}
             <button
               type="button"
-              onClick={player.toggle}
-              aria-label={isPlaying ? 'Pause' : 'Play'}
-              title={isPlaying ? 'Pause' : 'Play'}
-              className="flex size-10 items-center justify-center rounded-full bg-white text-ink-950 transition-transform hover:scale-105 active:scale-95"
+              onClick={openSheet}
+              aria-label="Open now playing"
+              aria-expanded={expanded}
+              title="Open now playing"
+              className="relative size-12 shrink-0 rounded-lg transition-transform duration-fast hover:scale-[1.04] sm:size-16"
             >
-              {isPlaying ? (
-                <PauseIcon className="size-4" />
-              ) : (
-                <PlayIcon className="size-4 translate-x-px" />
+              {/* Mounted only while collapsed. Two live elements sharing one
+                  `layoutId` makes the older a follower projected onto the newer
+                  box, which paints a stretched copy of this thumbnail at full
+                  size behind the sheet. */}
+              {expanded ? null : (
+                <motion.span
+                  layoutId={COVER_MORPH_ID}
+                  transition={morph}
+                  className="absolute inset-0 block overflow-hidden rounded-lg bg-ink-800 shadow-lift"
+                >
+                  {current.album_cover_url ? (
+                    <Image
+                      src={current.album_cover_url}
+                      alt=""
+                      fill
+                      sizes="56px"
+                      className="object-cover"
+                    />
+                  ) : (
+                    <MusicIcon className="absolute inset-0 m-auto size-5 text-muted-dim" />
+                  )}
+                </motion.span>
               )}
             </button>
 
-            <IconButton label="Next track" onClick={player.next}>
-              <SkipForwardIcon className="size-5" />
-            </IconButton>
-
-            <IconButton
-              label={repeat === 'one' ? 'Repeat one' : repeat === 'all' ? 'Repeat all' : 'Repeat off'}
-              active={repeat !== 'off'}
-              onClick={player.cycleRepeat}
+            <button
+              type="button"
+              onClick={openSheet}
+              aria-label="Open now playing"
+              aria-expanded={expanded}
+              className="min-w-0 flex-1 text-left"
             >
-              {repeat === 'one' ? (
-                <RepeatOneIcon className="size-4" />
+              <span className="block truncate text-sm font-medium text-white">{current.title}</span>
+              <span className="block truncate text-xs text-muted">
+                {current.artist_name}
+                {current.album_title ? (
+                  <span className="text-muted-dim"> · {current.album_title}</span>
+                ) : null}
+              </span>
+            </button>
+
+            <LikeButton trackId={current.id} className="hidden shrink-0 sm:block" />
+          </div>
+
+          <div className="flex flex-[1.4] flex-col items-center gap-0.5">
+            <div className="flex items-center gap-1 sm:gap-2">
+              <IconButton label="Shuffle" active={shuffle} onClick={player.toggleShuffle}>
+                <ShuffleIcon className="size-4" />
+              </IconButton>
+
+              <IconButton label="Previous track" onClick={player.previous}>
+                <SkipBackIcon className="size-5" />
+              </IconButton>
+
+              <button
+                type="button"
+                onClick={player.toggle}
+                aria-label={isPlaying ? 'Pause' : 'Play'}
+                title={isPlaying ? 'Pause' : 'Play'}
+                className="flex size-10 items-center justify-center rounded-full bg-white text-ink-950 shadow-glow transition-transform duration-fast hover:scale-105 active:scale-95"
+              >
+                {isPlaying ? (
+                  <PauseIcon className="size-4" />
+                ) : (
+                  <PlayIcon className="size-4 translate-x-px" />
+                )}
+              </button>
+
+              <IconButton label="Next track" onClick={player.next}>
+                <SkipForwardIcon className="size-5" />
+              </IconButton>
+
+              <IconButton
+                label={
+                  repeat === 'one' ? 'Repeat one' : repeat === 'all' ? 'Repeat all' : 'Repeat off'
+                }
+                active={repeat !== 'off'}
+                onClick={player.cycleRepeat}
+              >
+                {repeat === 'one' ? (
+                  <RepeatOneIcon className="size-4" />
+                ) : (
+                  <RepeatIcon className="size-4" />
+                )}
+              </IconButton>
+            </div>
+
+            <Scrubber />
+          </div>
+
+          {/* Volume, hidden on phones where the hardware keys own this job. */}
+          <div className="hidden flex-1 items-center justify-end gap-2 sm:flex">
+            <IconButton label={muted ? 'Unmute' : 'Mute'} onClick={player.toggleMute}>
+              {muted || volume === 0 ? (
+                <VolumeMutedIcon className="size-4" />
               ) : (
-                <RepeatIcon className="size-4" />
+                <VolumeIcon className="size-4" />
               )}
             </IconButton>
-          </div>
-
-          <div className="flex w-full items-center gap-2">
-            <span className="w-10 shrink-0 text-right text-[11px] tabular-nums text-muted-dim">
-              {formatDuration(shown)}
-            </span>
             <input
               type="range"
-              className="range"
-              style={fillStyle(shown, duration)}
+              className="range max-w-28"
+              style={fillStyle(muted ? 0 : volume, 1)}
               min={0}
-              max={duration || 0}
-              step={0.5}
-              value={Math.min(shown, duration || 0)}
-              aria-label="Seek"
-              onChange={(event) => setScrub(Number(event.target.value))}
-              onPointerUp={commitScrub}
-              onKeyUp={commitScrub}
-              onBlur={commitScrub}
+              max={1}
+              step={0.01}
+              value={muted ? 0 : volume}
+              aria-label="Volume"
+              aria-valuetext={`${Math.round((muted ? 0 : volume) * 100)}%`}
+              onChange={(event) => player.setVolume(Number(event.target.value))}
             />
-            <span className="w-10 shrink-0 text-[11px] tabular-nums text-muted-dim">
-              {formatDuration(duration)}
-            </span>
           </div>
         </div>
-
-        {/* Volume, hidden on phones where the hardware keys own this job. */}
-        <div className="hidden flex-1 items-center justify-end gap-2 sm:flex">
-          <IconButton label={muted ? 'Unmute' : 'Mute'} onClick={player.toggleMute}>
-            {muted || volume === 0 ? (
-              <VolumeMutedIcon className="size-4" />
-            ) : (
-              <VolumeIcon className="size-4" />
-            )}
-          </IconButton>
-          <input
-            type="range"
-            className="range max-w-28"
-            style={fillStyle(muted ? 0 : volume, 1)}
-            min={0}
-            max={1}
-            step={0.01}
-            value={muted ? 0 : volume}
-            aria-label="Volume"
-            onChange={(event) => player.setVolume(Number(event.target.value))}
-          />
-        </div>
       </div>
-    </div>
+
+      <NowPlaying dialogRef={dialogRef} open={expanded} onClose={() => setExpanded(false)} />
+    </>
   );
 }

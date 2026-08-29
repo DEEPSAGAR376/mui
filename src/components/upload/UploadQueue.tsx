@@ -7,12 +7,19 @@
  * `genUploader` instead of the React hook — the hook only reports one aggregate
  * number for a whole batch, which on a 200-file drop is a single bar that says
  * almost nothing. Here each row moves on its own.
+ *
+ * Those bars were decorative spans — a width in a style attribute and nothing
+ * else, so a screen reader was told only that an upload was "uploading" and never
+ * how far. `role="progressbar"` with the three `aria-value*` attributes is what
+ * makes the number itself readable, and the label names the file because a
+ * 200-file drop puts a great many of them on one screen.
  */
 
 import { formatBytes, plural } from '@/lib/format';
 import type { Candidate, CandidateStatus } from '@/lib/ingest/types';
 import type { IngestSummary } from '@/lib/ingest/run';
 import { AlertIcon, CheckIcon, CloseIcon, SpinnerIcon, UploadIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 
 const STATUS_TEXT: Record<CandidateStatus, string> = {
   parsing: 'reading tags',
@@ -40,7 +47,7 @@ function QueueRow({ candidate }: { candidate: Candidate }) {
   const active = candidate.status === 'uploading' || candidate.status === 'committing';
 
   return (
-    <li className="flex items-center gap-3 rounded-md px-2 py-1.5 text-sm odd:bg-ink-900/40">
+    <li className="flex items-center gap-3 rounded-lg px-2 py-1.5 text-sm odd:bg-ink-900/40">
       <span className="w-4 shrink-0 text-muted-dim">
         {candidate.status === 'done' ? (
           <CheckIcon className="size-4 text-ok" />
@@ -61,9 +68,16 @@ function QueueRow({ candidate }: { candidate: Candidate }) {
       {/* The bar only exists while there is something to watch; a static 0% or
           100% bar on every row is noise. */}
       {active ? (
-        <span className="hidden h-1 w-28 overflow-hidden rounded-full bg-ink-800 sm:block">
+        <span
+          role="progressbar"
+          aria-valuenow={Math.round(candidate.progress)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={`Upload progress for ${candidate.title || candidate.file.name}`}
+          className="hidden h-1 w-28 overflow-hidden rounded-full bg-ink-800 sm:block"
+        >
           <span
-            className="block h-full rounded-full bg-accent transition-[width] duration-200"
+            className="block h-full rounded-full bg-accent transition-[width] duration-glide ease-glide"
             style={{ width: `${Math.round(candidate.progress)}%` }}
           />
         </span>
@@ -112,7 +126,7 @@ export function UploadQueue({
     <section className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-white">
+          <h2 className="font-display text-sm font-semibold text-white">
             {ready.length > 0
               ? `${ready.length} ${plural(ready.length, 'track')} ready · ${formatBytes(pendingBytes)}`
               : `${done.length} of ${candidates.length} uploaded`}
@@ -131,48 +145,27 @@ export function UploadQueue({
 
         <div className="flex items-center gap-2">
           {running ? (
-            <button
-              type="button"
-              onClick={onAbort}
-              className="inline-flex items-center gap-2 rounded-lg border border-danger/40 px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
-            >
+            <Button variant="danger-quiet" onClick={onAbort}>
               <CloseIcon className="size-4" />
               Stop
-            </button>
+            </Button>
           ) : (
             <>
               {failed.length > 0 ? (
-                <button
-                  type="button"
-                  onClick={onRetryFailed}
-                  className="rounded-lg border border-ink-700 px-3 py-2 text-sm text-muted transition-colors hover:border-ink-600 hover:text-white"
-                >
-                  Retry {failed.length} failed
-                </button>
+                <Button onClick={onRetryFailed}>Retry {failed.length} failed</Button>
               ) : null}
-              <button
-                type="button"
-                onClick={onClear}
-                className="rounded-lg border border-ink-700 px-3 py-2 text-sm text-muted transition-colors hover:border-ink-600 hover:text-white"
-              >
-                Clear
-              </button>
-              <button
-                type="button"
-                disabled={ready.length === 0}
-                onClick={onStart}
-                className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-ink-950 transition-opacity hover:opacity-90 disabled:opacity-40"
-              >
+              <Button onClick={onClear}>Clear</Button>
+              <Button variant="primary" disabled={ready.length === 0} onClick={onStart}>
                 <UploadIcon className="size-4" />
                 Upload {ready.length > 0 ? ready.length : ''}
-              </button>
+              </Button>
             </>
           )}
         </div>
       </div>
 
       {summary ? (
-        <div className="rounded-lg border border-ink-800 bg-ink-900/60 px-4 py-3 text-sm">
+        <div className="glass rounded-2xl border border-hairline px-4 py-3 text-sm">
           <p className="text-white">
             {summary.committed} {plural(summary.committed, 'track')} added
             {summary.duplicates > 0 ? `, ${summary.duplicates} already there` : ''}

@@ -27,11 +27,11 @@ export async function SiteHeader() {
   }
 
   return (
-    <header className="sticky top-0 z-30 border-b border-ink-800 bg-ink-950/80 backdrop-blur-xl">
+    <header className="glass sticky top-0 z-30 border-b border-hairline">
       <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3">
         <Link href="/" className="flex shrink-0 items-center gap-2 text-white">
           <MusicIcon className="size-5 text-accent-bright" />
-          <span className="text-sm font-semibold tracking-tight">newmv</span>
+          <span className="font-display text-sm font-semibold tracking-tight">newmv</span>
         </Link>
 
         <div className="min-w-0 flex-1 overflow-x-auto">
@@ -40,7 +40,10 @@ export async function SiteHeader() {
 
         <Link
           href="/login"
-          className="shrink-0 rounded-full border border-ink-700 px-3 py-1.5 text-xs text-muted transition-colors hover:border-ink-600 hover:text-white"
+          // Not a `Button`: that renders a `<button>`, and this navigates. The classes
+          // are `Button`'s `secondary` / `size="sm"` recipe verbatim so the two read as
+          // one family.
+          className="shrink-0 rounded-full border border-ink-600 px-3 py-1.5 text-xs font-medium text-muted transition duration-fast hover:border-ink-500 hover:text-white"
         >
           {admin ? 'Account' : 'Sign in'}
         </Link>

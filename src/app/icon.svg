@@ -1,0 +1,29 @@
+<!--
+  Tab icon. Hand-authored rather than generated: the `icon` convention accepts
+  `.svg`, this is one glyph on one fill, and a code-generated PNG would be a
+  build-time render of something that is already vector.
+
+  The glyph is `MusicIcon` from `src/components/icons.tsx` at its own 24x24
+  scale, inset 4px inside a 32x32 box. Two departures from the component: the
+  note heads are filled rather than stroked, because 3px rings turn to mush at
+  16px, and every colour is literal — a favicon has no `currentColor` to inherit.
+
+  There is deliberately no `favicon.ico`. A code-generated `favicon` is not a
+  Next convention at all (only `icon` and `apple-icon` are), and `icon.svg`
+  already produces the <link rel="icon"> that fills the tab.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="7" fill="#8f74f5" />
+  <g transform="translate(4 4)">
+    <path
+      d="M9 18V6l11-2v12"
+      fill="none"
+      stroke="#07080b"
+      stroke-width="2.4"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <circle cx="6" cy="18" r="3.2" fill="#07080b" />
+    <circle cx="17" cy="16" r="3.2" fill="#07080b" />
+  </g>
+</svg>

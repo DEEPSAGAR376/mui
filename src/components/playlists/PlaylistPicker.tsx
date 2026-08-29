@@ -12,6 +12,8 @@
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { addToPlaylist, createPlaylist } from '@/lib/actions/playlists';
 import { CheckIcon, PlusIcon, SpinnerIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 
 export interface PlaylistOption {
   id: string;
@@ -94,8 +96,10 @@ export function PlaylistPicker({
 
   return (
     <div ref={root} className={`relative ${className ?? ''}`}>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        shape="square"
+        size="sm"
         onClick={(event) => {
           event.stopPropagation();
           setOpen((prev) => !prev);
@@ -103,10 +107,9 @@ export function PlaylistPicker({
         aria-label="Add to playlist"
         aria-expanded={open}
         title="Add to playlist"
-        className="rounded-full p-1.5 text-muted-dim transition-colors hover:text-white"
       >
         {pending ? <SpinnerIcon className="size-4" /> : <PlusIcon className="size-4" />}
-      </button>
+      </Button>
 
       {open ? (
         <div
@@ -139,7 +142,7 @@ export function PlaylistPicker({
               <div className="border-t border-ink-700">
                 {creating ? (
                   <div className="flex items-center gap-1 p-2">
-                    <input
+                    <Input
                       autoFocus
                       value={name}
                       onChange={(event) => setName(event.target.value)}
@@ -147,15 +150,13 @@ export function PlaylistPicker({
                         if (event.key === 'Enter') create();
                       }}
                       placeholder="Playlist name"
-                      className="min-w-0 flex-1 rounded-md border border-ink-600 bg-ink-900 px-2 py-1.5 text-sm outline-none focus:border-accent"
+                      aria-label="Playlist name"
+                      size="sm"
+                      className="min-w-0 flex-1"
                     />
-                    <button
-                      type="button"
-                      onClick={create}
-                      className="rounded-md bg-accent px-2 py-1.5 text-xs font-medium text-white hover:bg-accent-bright"
-                    >
+                    <Button variant="primary" size="sm" onClick={create}>
                       Add
-                    </button>
+                    </Button>
                   </div>
                 ) : (
                   <button

@@ -7,6 +7,7 @@
  */
 
 import { PlayAllButtons, TrackList } from '@/components/player/TrackList';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { myPlaylists } from '@/lib/actions/playlists';
 import { listRecentTracks, libraryStats } from '@/lib/data/tracks';
 import { plural } from '@/lib/format';
@@ -22,18 +23,15 @@ export default async function LibraryPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-white">Library</h1>
-          <p className="mt-1 text-sm text-muted">
-            {stats.tracks === 0
-              ? 'Nothing uploaded yet.'
-              : `${plural(stats.tracks, 'track')} · ${plural(stats.albums, 'album')} · ${plural(stats.artists, 'artist')}`}
-          </p>
-        </div>
-
-        <PlayAllButtons tracks={tracks} />
-      </div>
+      <PageHeader
+        title="Library"
+        subtitle={
+          stats.tracks === 0
+            ? 'Nothing uploaded yet.'
+            : `${plural(stats.tracks, 'track')} · ${plural(stats.albums, 'album')} · ${plural(stats.artists, 'artist')}`
+        }
+        actions={<PlayAllButtons tracks={tracks} />}
+      />
 
       <TrackList
         tracks={tracks}

@@ -214,6 +214,32 @@ export function CloseIcon({ className }: IconProps) {
   );
 }
 
+export function ChevronDownIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="m6 9 6 6 6-6" />
+    </Svg>
+  );
+}
+
+export function ChevronUpIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="m6 15 6-6 6 6" />
+    </Svg>
+  );
+}
+
+/** Three list lines and a play glyph: what is queued, and that it is playable. */
+export function QueueIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M4 7h11M4 12h11M4 17h7" />
+      <path d="M16.5 13.5v7l5-3.5z" />
+    </Svg>
+  );
+}
+
 export function AlertIcon({ className }: IconProps) {
   return (
     <Svg className={className}>
@@ -224,7 +250,13 @@ export function AlertIcon({ className }: IconProps) {
   );
 }
 
-/** Indeterminate work. CSS-animated so it costs nothing to keep on screen. */
+/**
+ * Indeterminate work. CSS-animated so it costs nothing to keep on screen.
+ *
+ * `data-motion-keep` exempts it from the reduced-motion sweep in `globals.css`:
+ * this animation carries information rather than decoration, and a spinner that
+ * stops spinning is a broken loading indicator, not a calmer one.
+ */
 export function SpinnerIcon({ className }: IconProps) {
   return (
     <svg
@@ -232,6 +264,7 @@ export function SpinnerIcon({ className }: IconProps) {
       fill="none"
       className={`${className ?? 'size-5'} animate-spin`}
       aria-hidden="true"
+      data-motion-keep
     >
       <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2.5" />
       <path

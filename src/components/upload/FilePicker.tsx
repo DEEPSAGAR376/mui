@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { collectFromDataTransfer, collectFromInput, type RawFile } from '@/lib/ingest/collect';
 import { FolderIcon, SpinnerIcon, UploadIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 
 interface FilePickerProps {
   onFiles: (files: RawFile[]) => void;
@@ -65,7 +66,7 @@ export function FilePicker({ onFiles, busy = false }: FilePickerProps) {
         // every `webkitGetAsEntry()` before its first await for the same reason.
         void collectFromDataTransfer(event.dataTransfer).then(onFiles);
       }}
-      className={`rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors ${
+      className={`rounded-2xl border-2 border-dashed px-6 py-10 text-center transition-colors duration-fast ${
         dragging ? 'border-accent bg-accent/5' : 'border-ink-800 bg-ink-900/40'
       }`}
     >
@@ -80,23 +81,13 @@ export function FilePicker({ onFiles, busy = false }: FilePickerProps) {
         </p>
 
         <div className="flex flex-wrap items-center justify-center gap-2">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => dirInput.current?.click()}
-            className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-ink-950 transition-opacity hover:opacity-90 disabled:opacity-40"
-          >
+          <Button variant="primary" disabled={busy} onClick={() => dirInput.current?.click()}>
             <FolderIcon className="size-4" />
             Choose a folder
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => fileInput.current?.click()}
-            className="rounded-lg border border-ink-700 px-4 py-2 text-sm text-muted transition-colors hover:border-ink-600 hover:text-white disabled:opacity-40"
-          >
+          </Button>
+          <Button disabled={busy} onClick={() => fileInput.current?.click()}>
             Choose files
-          </button>
+          </Button>
         </div>
       </div>
 

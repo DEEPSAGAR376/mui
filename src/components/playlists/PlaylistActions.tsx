@@ -1,10 +1,27 @@
 'use client';
 
-/** Rename, publish, delete. Owner-only, and RLS says so too. */
+/**
+ * Rename, publish, delete. Owner-only, and RLS says so too.
+ *
+ * The delete confirmation is a modal `ConfirmDialog` rather than the pair of
+ * buttons that used to replace the trigger in place: swapping the trigger out
+ * dropped focus on the floor, and there was no Escape. Keeping the trash button
+ * mounted underneath is what lets the dialog hand focus back to it on close.
+ *
+ * The Public/Private pill stays hand-written on purpose. It is a two-state control
+ * and no `Button` variant expresses the "on" half; appending the accent classes to
+ * `secondary` would put two `border-color` and two `text-color` utilities from the
+ * same namespace in conflict, which Tailwind resolves by *sheet* order rather than
+ * by the order they appear in the attribute. Its padding already matches
+ * `size="sm"`.
+ */
 
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { CheckIcon, SpinnerIcon, TrashIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { Input } from '@/components/ui/Input';
 import {
   deletePlaylist,
   renamePlaylist,
@@ -43,8 +60,10 @@ export function PlaylistActions({
       <div className="flex items-center gap-2">
         {editing ? (
           <>
-            <input
+            <Input
               autoFocus
+              size="md"
+              aria-label="Playlist name"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
@@ -59,30 +78,26 @@ export function PlaylistActions({
                   });
                 }
               }}
-              className="w-44 rounded-full border border-ink-700 bg-ink-900 px-3 py-1.5 text-sm outline-none focus:border-accent"
+              className="w-44"
             />
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              shape="square"
               onClick={() =>
                 run(async () => {
                   await renamePlaylist(playlistId, draft);
                   setEditing(false);
                 })
               }
-              className="rounded-full bg-accent p-2 text-white hover:bg-accent-bright"
               aria-label="Save name"
             >
               {pending ? <SpinnerIcon className="size-4" /> : <CheckIcon className="size-4" />}
-            </button>
+            </Button>
           </>
         ) : (
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            className="rounded-full border border-ink-700 px-3 py-1.5 text-xs text-muted transition-colors hover:border-ink-600 hover:text-white"
-          >
+          <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
             Rename
-          </button>
+          </Button>
         )}
 
         <button
@@ -98,42 +113,41 @@ export function PlaylistActions({
           {isPublic ? 'Public' : 'Private'}
         </button>
 
-        {confirming ? (
-          <span className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() =>
-                run(async () => {
-                  await deletePlaylist(playlistId);
-                  router.push('/playlists');
-                })
-              }
-              className="rounded-full bg-danger px-3 py-1.5 text-xs font-medium text-ink-950"
-            >
-              Delete for good
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirming(false)}
-              className="rounded-full border border-ink-700 px-3 py-1.5 text-xs text-muted hover:text-white"
-            >
-              Keep
-            </button>
-          </span>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setConfirming(true)}
-            aria-label="Delete playlist"
-            title="Delete playlist"
-            className="rounded-full border border-ink-700 p-2 text-muted-dim transition-colors hover:border-danger hover:text-danger"
-          >
-            <TrashIcon className="size-4" />
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => setConfirming(true)}
+          aria-label="Delete playlist"
+          title="Delete playlist"
+          className="rounded-full border border-ink-700 p-2 text-muted-dim transition-colors duration-fast hover:border-danger hover:text-danger"
+        >
+          <TrashIcon className="size-4" />
+        </button>
       </div>
 
-      {error ? <p className="max-w-xs text-right text-xs text-danger">{error}</p> : null}
+      {error ? (
+        <p aria-live="polite" className="max-w-xs text-right text-xs text-danger">
+          {error}
+        </p>
+      ) : null}
+
+      <ConfirmDialog
+        open={confirming}
+        title="Delete this playlist?"
+        confirmLabel="Delete for good"
+        cancelLabel="Keep"
+        pending={pending}
+        onConfirm={() =>
+          run(async () => {
+            await deletePlaylist(playlistId);
+            router.push('/playlists');
+          })
+        }
+        onCancel={() => setConfirming(false)}
+      >
+        <span className="font-medium text-white">{name}</span> is deleted for everyone it
+        was shared with. The tracks in it are untouched — a playlist only ever held
+        references to them.
+      </ConfirmDialog>
     </div>
   );
 }

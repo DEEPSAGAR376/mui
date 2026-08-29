@@ -6,10 +6,17 @@
  * design: browsing must not mint `auth.users` rows.
  */
 
+import type { Metadata } from 'next';
 import { likedTracks } from '@/lib/actions/likes';
 import { PlayAllButtons, TrackList } from '@/components/player/TrackList';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { myPlaylists } from '@/lib/actions/playlists';
 import { plural } from '@/lib/format';
+
+export const metadata: Metadata = {
+  title: 'Favourites',
+  description: 'Tracks you have liked, newest first.',
+};
 
 export default async function LikesPage() {
   const [tracks, playlists] = await Promise.all([likedTracks(), myPlaylists()]);
@@ -17,16 +24,13 @@ export default async function LikesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-white">Favourites</h1>
-          <p className="mt-1 text-sm text-muted">
-            {tracks.length === 0 ? 'Nothing yet.' : `${plural(tracks.length, 'track')}, newest first`}
-          </p>
-        </div>
-
-        <PlayAllButtons tracks={tracks} />
-      </div>
+      <PageHeader
+        title="Favourites"
+        subtitle={
+          tracks.length === 0 ? 'Nothing yet.' : `${plural(tracks.length, 'track')}, newest first`
+        }
+        actions={<PlayAllButtons tracks={tracks} />}
+      />
 
       <TrackList
         tracks={tracks}

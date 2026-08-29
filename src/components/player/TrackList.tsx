@@ -8,8 +8,10 @@
  * would make every list a set of disconnected one-song queues.
  */
 
-import { PlayIcon, ShuffleIcon } from '@/components/icons';
+import { MusicIcon, PlayIcon, ShuffleIcon } from '@/components/icons';
 import type { PlaylistOption } from '@/components/playlists/PlaylistPicker';
+import { Button } from '@/components/ui/Button';
+import { EmptyState } from '@/components/ui/EmptyState';
 import type { TrackView } from '@/lib/supabase/types';
 import { usePlayer } from './PlayerProvider';
 import { TrackRow } from './TrackRow';
@@ -31,28 +33,30 @@ export function TrackList({
 
   if (tracks.length === 0) {
     return (
-      <p className="rounded-lg border border-dashed border-ink-700 px-4 py-10 text-center text-sm text-muted-dim">
-        {emptyMessage}
-      </p>
+      <EmptyState icon={<MusicIcon className="size-6" />}>{emptyMessage}</EmptyState>
     );
   }
 
   return (
-    <div className="flex flex-col">
+    // A real list, so a screen reader can say "list, 42 items" and jump by item.
+    // The separators live here rather than on the row: `divide-y` skips the last
+    // child, which is exactly "a hairline between rows and nowhere else".
+    <ul className="flex flex-col divide-y divide-hairline">
       {tracks.map((track, index) => (
-        <TrackRow
-          key={track.id}
-          track={track}
-          index={index}
-          playlists={playlists}
-          isCurrent={current?.id === track.id}
-          isPlaying={isPlaying}
-          showAlbum={showAlbum}
-          onPlay={() => play(tracks, index)}
-          onRemove={onRemove ? () => onRemove(track.id) : undefined}
-        />
+        <li key={track.id}>
+          <TrackRow
+            track={track}
+            index={index}
+            playlists={playlists}
+            isCurrent={current?.id === track.id}
+            isPlaying={isPlaying}
+            showAlbum={showAlbum}
+            onPlay={() => play(tracks, index)}
+            onRemove={onRemove ? () => onRemove(track.id) : undefined}
+          />
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
@@ -63,20 +67,12 @@ export function PlayAllButtons({ tracks }: { tracks: TrackView[] }) {
 
   return (
     <div className="flex items-center gap-2">
-      <button
-        type="button"
-        onClick={() => play(tracks, 0)}
-        className="flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-bright"
-      >
+      <Button variant="primary" onClick={() => play(tracks, 0)}>
         <PlayIcon className="size-4" /> Play
-      </button>
-      <button
-        type="button"
-        onClick={() => playShuffled(tracks)}
-        className="flex items-center gap-2 rounded-full border border-ink-600 px-4 py-2 text-sm font-medium text-muted transition-colors hover:border-ink-500 hover:text-white"
-      >
+      </Button>
+      <Button variant="secondary" onClick={() => playShuffled(tracks)}>
         <ShuffleIcon className="size-4" /> Shuffle
-      </button>
+      </Button>
     </div>
   );
 }

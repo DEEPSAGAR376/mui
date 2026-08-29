@@ -7,9 +7,13 @@
  * asked to accept a file it already has.
  */
 
+import type { Metadata } from 'next';
 import { formatBytes, plural } from '@/lib/format';
 import { librarySize, quotaUsage } from '@/lib/data/storage';
 import { UploadManager } from '@/components/upload/UploadManager';
+import { PageHeader } from '@/components/ui/PageHeader';
+
+export const metadata: Metadata = { title: 'Upload' };
 
 export default async function UploadPage() {
   const [library, quota] = await Promise.all([librarySize(), quotaUsage()]);
@@ -26,39 +30,55 @@ export default async function UploadPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-white">Upload</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted">
-            Drop a folder. Tags, cover art and durations are read out of the files
-            themselves; anything the tags don&apos;t answer is guessed from the filename
-            and folder names. Only what is still incomplete reaches the review grid.
-          </p>
-        </div>
-
-        <dl className="flex gap-6 text-right text-sm">
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-muted-dim">In the library</dt>
-            <dd className="text-white">
-              {library.tracks} {plural(library.tracks, 'track')} · {formatBytes(library.bytes)}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-muted-dim">Storage used</dt>
-            <dd className="text-white">
-              {quota
-                ? `${formatBytes(quota.appTotalBytes)} of ${formatBytes(quota.limitBytes)}${
-                    percent === null ? '' : ` (${percent}%)`
-                  }`
-                : 'unavailable'}
-            </dd>
-          </div>
-        </dl>
-      </div>
+      {/*
+        The copy goes through `children` rather than `subtitle`: it is three lines
+        long and `PageHeader`'s subtitle has no measure limit, so on a wide screen
+        it would run the full width of the header. The `<dl>` is the actions slot —
+        not a control, but it is what sits opposite the title here.
+      */}
+      <PageHeader
+        title="Upload"
+        actions={
+          <dl className="flex gap-6 text-right text-sm">
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-muted-dim">In the library</dt>
+              <dd className="text-white">
+                {library.tracks} {plural(library.tracks, 'track')} · {formatBytes(library.bytes)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-muted-dim">Storage used</dt>
+              <dd className="text-white">
+                {quota
+                  ? `${formatBytes(quota.appTotalBytes)} of ${formatBytes(quota.limitBytes)}${
+                      percent === null ? '' : ` (${percent}%)`
+                    }`
+                  : 'unavailable'}
+              </dd>
+            </div>
+          </dl>
+        }
+      >
+        <p className="mt-1 max-w-2xl text-sm text-muted">
+          Drop a folder. Tags, cover art and durations are read out of the files
+          themselves; anything the tags don&apos;t answer is guessed from the filename
+          and folder names. Only what is still incomplete reaches the review grid.
+        </p>
+      </PageHeader>
 
       {quota && percent !== null ? (
         <div>
-          <div className="h-1 overflow-hidden rounded-full bg-ink-800">
+          {/* A real `progressbar`, not a decorative span: this is the one number on
+              the screen that says whether the next batch will fit, and it was
+              readable only as a visual width. */}
+          <div
+            role="progressbar"
+            aria-valuenow={percent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label="Storage used"
+            className="h-1 overflow-hidden rounded-full bg-ink-800"
+          >
             <div
               className={`h-full rounded-full ${percent > 90 ? 'bg-danger' : 'bg-accent'}`}
               style={{ width: `${percent}%` }}

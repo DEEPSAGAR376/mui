@@ -4,6 +4,12 @@
  * Tailwind v4 keeps the design tokens in CSS, not a JS config. Everything named
  * here becomes a utility: `--color-ink-800` gives `bg-ink-800`, `text-ink-800`,
  * `border-ink-800`.
+ *
+ * This is a plain `@theme`, so every token below is also emitted as a `:root`
+ * custom property. That matters for the motion tokens: the reduced-motion block
+ * further down overrides them at runtime, and an `@theme inline` block emits
+ * nothing to override. The font tokens are the opposite case and get their own
+ * `@theme inline` block underneath.
  */
 @theme {
   --color-ink-950: #07080b;
@@ -14,8 +20,12 @@
   --color-ink-600: #2b313f;
   --color-ink-500: #3d4453;
 
+  --color-fg: #e8eaf0;
   --color-muted: #8b91a3;
-  --color-muted-dim: #646b7d;
+  /* Was #646b7d, which measures ~3.7:1 on ink-950 and worse over glass — under
+     the 4.5:1 floor at the 11-12px sizes it gets used at. ~5:1 now. */
+  --color-muted-dim: #7b8296;
+  --color-hairline: rgb(255 255 255 / 0.08);
 
   --color-accent: #8f74f5;
   --color-accent-bright: #a78bfa;
@@ -25,9 +35,127 @@
   --color-warn: #f0b356;
   --color-ok: #5fd39a;
 
+  /* Two sizes the app did not have. The paired `--*--line-height` and
+     `--*--letter-spacing` tokens are a v4 feature: they ride along with the size
+     utility instead of needing separate classes. */
+  --text-display: 2rem;
+  --text-display--line-height: 1.1;
+  --text-display--letter-spacing: -0.02em;
+
+  --text-hero: 3.25rem;
+  --text-hero--line-height: 1.02;
+  --text-hero--letter-spacing: -0.03em;
+
+  /* Elevation for near-black backgrounds, where a conventional drop shadow is
+     simply invisible. The inset top highlight is what reads as a lit edge on
+     glass; the cast underneath gives the panel somewhere to sit. */
+  --shadow-glass:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.06),
+    0 24px 48px -16px rgb(0 0 0 / 0.75);
+  --shadow-lift: 0 14px 34px -10px rgb(0 0 0 / 0.8);
+  --shadow-glow:
+    0 0 0 1px color-mix(in oklab, var(--color-accent) 40%, transparent),
+    0 10px 30px -8px color-mix(in oklab, var(--color-accent) 55%, transparent);
+
+  --ease-glide: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* The namespace is `--transition-duration-*`. A `--duration-*` token compiles
+     to no utility at all and fails silently: the `duration` utility declares
+     `valueThemeKeys: ["--transition-duration"]`. */
+  --transition-duration-fast: 120ms;
+  --transition-duration-glide: 220ms;
+  --transition-duration-sheet: 320ms;
+
+  /* Blur for the cover-art light source in `CoverBackdrop`. */
+  --blur-backdrop: 72px;
+
+  /* A real level meter — `scaleY` off the baseline — rather than Tailwind's
+     `pulse`, which fades instead of bouncing. */
+  --animate-meter: meter 900ms var(--ease-glide) infinite alternate;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  @keyframes meter {
+    from {
+      transform: scaleY(0.3);
+    }
+    to {
+      transform: scaleY(1);
+    }
+  }
+
+  @keyframes shimmer {
+    from {
+      background-position: -160% 0;
+    }
+    to {
+      background-position: 260% 0;
+    }
+  }
+}
+
+/*
+ * `next/font` defines `--font-inter` and `--font-sora` on `<html>`, outside
+ * `@theme`. A plain `@theme` here would emit the literal `var(--font-inter)`
+ * unresolved into the utility and silently fall back to the system stack;
+ * `inline` resolves it. Two `@theme` blocks in one sheet are legal.
+ */
+@theme inline {
   --font-sans:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
-    Arial, sans-serif;
+    var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display:
+    var(--font-sora), var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+/*
+ * The glass recipe, in exactly one place. The header, the player bar, the
+ * expanded now-playing sheet, the queue panel and the playlist cards all use it.
+ *
+ * Deliberately no `border` here, verified against the compiled sheet rather than
+ * assumed: Tailwind emits custom `@utility` rules *after* the built-ins, so a
+ * `border: 1px solid` shorthand in this block beats `border-x-0` / `border-b` at
+ * the call site and every glass surface ends up with a full box outline. Sites
+ * add their own `border border-hairline` — or `border-b` alone, for the header.
+ */
+@utility glass {
+  background-color: color-mix(in oklab, var(--color-ink-900) 72%, transparent);
+  backdrop-filter: blur(20px) saturate(140%);
+  box-shadow: var(--shadow-glass);
+}
+
+/* Without `backdrop-filter`, album art behind a panel would sit unblurred under
+   the text — a contrast failure, not a cosmetic one. Degrade to opaque. */
+@supports not (backdrop-filter: blur(1px)) {
+  .glass {
+    background-color: var(--color-ink-900);
+  }
+}
+
+/*
+ * Loading skeletons: the gradient recipe only. The *movement* stays on the
+ * `animate-shimmer` utility at the call site, and that split is load-bearing
+ * rather than tidy.
+ *
+ * Tailwind emits a `@keyframes` block only for an `--animate-*` token some
+ * utility actually names. Measured in the compiled sheet: `@keyframes meter` and
+ * `spin` are present because `LevelMeter` and `SpinnerIcon` use them, `shimmer`
+ * is absent despite sitting in `@theme` beside `meter`, and `pulse` disappeared
+ * the moment `TrackRow` stopped using it. So writing `animation:
+ * var(--animate-shimmer)` in here would leave `@keyframes shimmer` tree-shaken
+ * out and the shimmer would silently never move. `Skeleton` applies both.
+ *
+ * `background-size` is wider than the box so the highlight has somewhere to
+ * travel from and to; `background-color` is what shows through either side of it.
+ */
+@utility skeleton {
+  background-color: var(--color-ink-800);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(255 255 255 / 0.07) 50%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
 }
 
 @layer base {
@@ -37,7 +165,7 @@
 
   body {
     background-color: var(--color-ink-950);
-    color: #e8eaf0;
+    color: var(--color-fg);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
   }
@@ -51,6 +179,42 @@
 
   ::selection {
     background: color-mix(in oklab, var(--color-accent) 45%, transparent);
+  }
+}
+
+/*
+ * Reduced motion, in one variable.
+ *
+ * Every `transition-*` utility compiles to
+ * `transition-duration: var(--tw-duration, var(--default-transition-duration))`,
+ * so overriding that one property neutralises every `transition-colors` and
+ * `transition-transform` in the project without touching a component. The `*`
+ * sweep underneath catches what the variable cannot: arbitrary values such as
+ * `duration-200` and `[animation-duration:1.1s]` are inlined into the rule and
+ * immune to it.
+ *
+ * `[data-motion-keep]` opts out, for animation that carries information rather
+ * than decoration — a spinner that stops spinning is a broken loading
+ * indicator, not a calmer one.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --default-transition-duration: 1ms;
+    --transition-duration-fast: 1ms;
+    --transition-duration-glide: 1ms;
+    --transition-duration-sheet: 1ms;
+    --animate-meter: none;
+    --animate-shimmer: none;
+  }
+
+  *:not([data-motion-keep]),
+  *:not([data-motion-keep])::before,
+  *:not([data-motion-keep])::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
@@ -78,7 +242,8 @@
   border-radius: 999px;
   background: linear-gradient(
     to right,
-    var(--color-accent) var(--fill),
+    var(--color-accent) 0%,
+    var(--color-accent-bright) var(--fill),
     var(--color-ink-600) var(--fill)
   );
 }
@@ -88,7 +253,8 @@
   border-radius: 999px;
   background: linear-gradient(
     to right,
-    var(--color-accent) var(--fill),
+    var(--color-accent) 0%,
+    var(--color-accent-bright) var(--fill),
     var(--color-ink-600) var(--fill)
   );
 }
@@ -103,7 +269,7 @@
   /* Hidden until hover/focus: a bare progress line is calmer, and the thumb is
      what tells you it is draggable the moment you reach for it. */
   opacity: 0;
-  transition: opacity 120ms ease;
+  transition: opacity var(--transition-duration-fast) ease;
 }
 
 .range::-moz-range-thumb {
@@ -113,7 +279,7 @@
   border-radius: 999px;
   background: #fff;
   opacity: 0;
-  transition: opacity 120ms ease;
+  transition: opacity var(--transition-duration-fast) ease;
 }
 
 .range:hover::-webkit-slider-thumb,

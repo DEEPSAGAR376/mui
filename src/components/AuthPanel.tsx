@@ -13,6 +13,8 @@
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { SpinnerIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 import { createClient } from '@/lib/supabase/client';
 
 type Mode = 'anonymous' | 'permanent' | 'none';
@@ -70,7 +72,7 @@ export function AuthPanel({ mode, email }: { mode: Mode; email: string | null })
   };
 
   return (
-    <div className="flex max-w-lg flex-col gap-4 rounded-xl border border-ink-800 bg-ink-900 p-5">
+    <div className="glass flex max-w-lg flex-col gap-4 rounded-2xl border border-hairline p-5">
       {mode === 'permanent' ? (
         <>
           <div>
@@ -79,14 +81,9 @@ export function AuthPanel({ mode, email }: { mode: Mode; email: string | null })
               Likes and playlists are attached to this account.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={signOut}
-            disabled={pending}
-            className="self-start rounded-full border border-ink-700 px-4 py-2 text-sm text-muted transition-colors hover:border-ink-600 hover:text-white disabled:opacity-40"
-          >
+          <Button variant="secondary" onClick={signOut} disabled={pending} className="self-start">
             Sign out
-          </button>
+          </Button>
         </>
       ) : (
         <>
@@ -102,24 +99,25 @@ export function AuthPanel({ mode, email }: { mode: Mode; email: string | null })
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <input
+            <Input
               type="email"
               inputMode="email"
               autoComplete="email"
+              tone="sunken"
               value={value}
               onChange={(event) => setValue(event.target.value)}
               placeholder="you@example.com"
-              className="min-w-56 flex-1 rounded-full border border-ink-700 bg-ink-950 px-4 py-2 text-sm outline-none transition-colors focus:border-accent"
+              aria-label="Email address"
+              className="min-w-56 flex-1"
             />
-            <button
-              type="button"
+            <Button
+              variant="primary"
               onClick={mode === 'anonymous' ? upgrade : signIn}
               disabled={pending || !value.includes('@')}
-              className="flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-bright disabled:opacity-40"
             >
               {pending ? <SpinnerIcon className="size-4" /> : null}
               {mode === 'anonymous' ? 'Save my session' : 'Send link'}
-            </button>
+            </Button>
           </div>
 
           {mode === 'anonymous' ? (

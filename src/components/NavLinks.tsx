@@ -13,8 +13,10 @@ export interface NavItem {
 export function NavLinks({ items }: { items: NavItem[] }) {
   const pathname = usePathname();
 
+  // The nav is named because the admin screens add a second one to the page, and
+  // "navigation, navigation" in a landmark list tells you nothing.
   return (
-    <nav className="flex items-center gap-1">
+    <nav aria-label="Main" className="flex items-center gap-1">
       {items.map((item) => {
         // Exact match for the root, prefix match elsewhere, so /playlists/<id>
         // still lights up "Playlists".

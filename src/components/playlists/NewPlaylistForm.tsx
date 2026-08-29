@@ -11,6 +11,8 @@
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { PlusIcon, SpinnerIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 import { createPlaylist } from '@/lib/actions/playlists';
 import { ensureSession } from '@/lib/supabase/client';
 
@@ -45,24 +47,20 @@ export function NewPlaylistForm() {
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-2">
-        <input
+        <Input
           value={name}
           onChange={(event) => setName(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter') submit();
           }}
           placeholder="New playlist name"
-          className="w-52 rounded-full border border-ink-700 bg-ink-900 px-4 py-2 text-sm outline-none transition-colors focus:border-accent"
+          aria-label="New playlist name"
+          className="w-52"
         />
-        <button
-          type="button"
-          onClick={submit}
-          disabled={pending || name.trim() === ''}
-          className="flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-bright disabled:opacity-40"
-        >
+        <Button variant="primary" onClick={submit} disabled={pending || name.trim() === ''}>
           {pending ? <SpinnerIcon className="size-4" /> : <PlusIcon className="size-4" />}
           Create
-        </button>
+        </Button>
       </div>
       {error ? <p className="text-xs text-danger">{error}</p> : null}
     </div>

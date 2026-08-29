@@ -17,6 +17,8 @@ import { directoryOf } from '@/lib/ingest/fallbacks';
 import { formatBytes, plural } from '@/lib/format';
 import type { Candidate, CoverArt, TrackFields } from '@/lib/ingest/types';
 import { AlertIcon, CheckIcon, MusicIcon, TrashIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 
 /** Last path segment of the containing folder — the bulk "use folder as album" source. */
 export function folderName(relativePath: string): string {
@@ -76,7 +78,7 @@ function CoverThumb({
           if (file && file.type.startsWith('image/')) onPick(file);
         }}
         title="Drop an image here, or click to choose one"
-        className={`grid size-14 shrink-0 place-items-center overflow-hidden rounded-md border transition-colors ${
+        className={`grid size-14 shrink-0 place-items-center overflow-hidden rounded-lg border transition-colors duration-fast ${
           over ? 'border-accent bg-accent/10' : 'border-ink-800 bg-ink-850'
         }`}
       >
@@ -102,9 +104,6 @@ function CoverThumb({
   );
 }
 
-const FIELD_CLASS =
-  'w-full rounded-md border border-ink-800 bg-ink-950 px-2 py-1.5 text-sm text-white placeholder:text-muted-dim focus:border-accent focus:outline-none';
-
 function Field({
   label,
   value,
@@ -123,11 +122,13 @@ function Field({
       <span className="text-[10px] font-medium uppercase tracking-wide text-muted-dim">
         {label}
       </span>
-      <input
+      <Input
+        size="sm"
+        tone="sunken"
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
-        className={FIELD_CLASS}
+        className="w-full"
       />
     </label>
   );
@@ -150,7 +151,9 @@ function NumberField({
       <span className="text-[10px] font-medium uppercase tracking-wide text-muted-dim">
         {label}
       </span>
-      <input
+      <Input
+        size="sm"
+        tone="sunken"
         type="number"
         inputMode="numeric"
         value={value ?? ''}
@@ -159,7 +162,7 @@ function NumberField({
           const parsed = Number(raw);
           onChange(raw === '' || !Number.isFinite(parsed) ? null : parsed);
         }}
-        className={FIELD_CLASS}
+        className="w-full"
       />
     </label>
   );
@@ -211,7 +214,7 @@ function BulkBar({
   };
 
   return (
-    <div className="sticky top-0 z-10 flex flex-col gap-3 rounded-lg border border-accent/30 bg-ink-900/95 p-3 backdrop-blur">
+    <div className="glass sticky top-0 z-10 flex flex-col gap-3 rounded-2xl border border-accent/30 p-3">
       <div className="flex flex-wrap items-end gap-2">
         <Field label="Artist" value={artist} onChange={setArtist} className="min-w-40 flex-1" />
         <Field
@@ -222,50 +225,32 @@ function BulkBar({
         />
         <Field label="Album" value={album} onChange={setAlbum} className="min-w-40 flex-1" />
         <Field label="Year" value={year} onChange={setYear} className="w-20" />
-        <button
-          type="button"
-          onClick={apply}
-          className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-ink-950 transition-opacity hover:opacity-90"
-        >
+        <Button variant="primary" onClick={apply}>
           Apply to {count}
-        </button>
+        </Button>
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-xs">
-        <button
-          type="button"
-          onClick={onFolderAlbum}
-          className="rounded-md border border-ink-700 px-2.5 py-1.5 text-muted transition-colors hover:border-ink-600 hover:text-white"
-        >
+        <Button size="sm" onClick={onFolderAlbum}>
           Use folder name as album
-        </button>
-        <button
-          type="button"
-          onClick={() => coverInput.current?.click()}
-          className="rounded-md border border-ink-700 px-2.5 py-1.5 text-muted transition-colors hover:border-ink-600 hover:text-white"
-        >
+        </Button>
+        <Button size="sm" onClick={() => coverInput.current?.click()}>
           Set cover for all
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ok-quiet"
+          size="sm"
           disabled={queueable === 0}
           onClick={onQueueAnyway}
           title={
-            queueable === 0
-              ? 'Every selected row still needs a title and an artist'
-              : undefined
+            queueable === 0 ? 'Every selected row still needs a title and an artist' : undefined
           }
-          className="rounded-md border border-ok/40 px-2.5 py-1.5 text-ok transition-colors hover:bg-ok/10 disabled:opacity-40"
         >
           Queue {queueable === count ? 'anyway' : `${queueable} anyway`}
-        </button>
-        <button
-          type="button"
-          onClick={onRemove}
-          className="rounded-md border border-danger/40 px-2.5 py-1.5 text-danger transition-colors hover:bg-danger/10"
-        >
+        </Button>
+        <Button variant="danger-quiet" size="sm" onClick={onRemove}>
           Remove from batch
-        </button>
+        </Button>
       </div>
 
       <input
@@ -304,7 +289,7 @@ function ReviewRow({
 
   return (
     <div
-      className={`rounded-lg border p-3 transition-colors ${
+      className={`rounded-2xl border p-3 transition-colors duration-fast ${
         selected ? 'border-accent/50 bg-accent/5' : 'border-ink-800 bg-ink-900/40'
       }`}
     >
@@ -350,21 +335,30 @@ function ReviewRow({
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
-          <button
-            type="button"
+          <Button
+            variant="ok-quiet"
+            size="sm"
             disabled={!queueable}
             onClick={onQueueAnyway}
             title={queueable ? 'Queue this file as it is' : 'Needs a title and an artist first'}
-            className="inline-flex items-center gap-1 rounded-md border border-ok/40 px-2 py-1 text-xs text-ok transition-colors hover:bg-ok/10 disabled:opacity-30"
           >
             <CheckIcon className="size-3.5" />
             Queue
-          </button>
+          </Button>
+          {/*
+            Hand-written, and not `variant="ghost"` with the colour appended.
+            `ghost` already carries `hover:bg-white/5 hover:text-white`, so adding
+            `hover:text-danger` would put two `text-color` utilities from one
+            namespace in conflict — which Tailwind resolves by *sheet* order, not by
+            the order they appear in the attribute. The hover colour is the whole
+            point of this control: it is the only thing that says destructive before
+            you press it.
+          */}
           <button
             type="button"
             onClick={onRemove}
             aria-label={`Remove ${candidate.file.name} from this batch`}
-            className="rounded-md p-1.5 text-muted-dim transition-colors hover:text-danger"
+            className="shrink-0 rounded-full p-1.5 text-muted-dim transition-colors duration-fast hover:text-danger"
           >
             <TrashIcon className="size-4" />
           </button>
@@ -477,7 +471,7 @@ export function ReviewGrid({
     <section className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-sm font-semibold text-white">
+          <h2 className="font-display text-sm font-semibold text-white">
             {candidates.length} {plural(candidates.length, 'file')} need a look
           </h2>
           <p className="text-xs text-muted-dim">

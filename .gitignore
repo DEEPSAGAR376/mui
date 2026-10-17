@@ -53,3 +53,5 @@ next-env.d.ts
 /.codegraph/
 /.firecrawl/
 /.cursor/
+/.CLAUDE.md/
+/.AGENT.md/

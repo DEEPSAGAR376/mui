@@ -122,13 +122,13 @@ export default function RootLayout({ children }: LayoutProps<'/'>) {
 
         <PlayerProvider>
           <LikesProvider initialLiked={liked}>
-            <NowPlayingBackdrop />
-            <SiteHeader />
-            {/* pb-32 leaves room for the fixed player bar. */}
-            <main id="main" className="mx-auto w-full max-w-7xl px-4 pt-6 pb-32">
-              {children}
-            </main>
-            <PlayerBar />
+              <NowPlayingBackdrop />
+              <SiteHeader />
+              {/* pb-32 leaves room for the fixed player bar. */}
+              <main id="main" className="mx-auto w-full max-w-7xl px-4 pt-6 pb-32">
+                {children}
+              </main>
+              <PlayerBar />
           </LikesProvider>
         </PlayerProvider>
       </body>

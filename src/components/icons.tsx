@@ -240,6 +240,27 @@ export function QueueIcon({ className }: IconProps) {
   );
 }
 
+/** Arrow pointing down into a tray — "save for offline". */
+export function DownloadIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M12 3v12" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+    </Svg>
+  );
+}
+
+/** Checkmark inside a tray — "already saved offline". */
+export function DownloadedIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="m7 11 3 3 7-7" />
+      <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+    </Svg>
+  );
+}
+
 export function AlertIcon({ className }: IconProps) {
   return (
     <Svg className={className}>

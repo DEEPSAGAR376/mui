@@ -20,6 +20,8 @@ import {
   useState,
 } from 'react';
 import type { TrackView } from '@/lib/supabase/types';
+import { resolveAudioSrc } from '@/lib/cache';
+import { prefetchAhead } from '@/lib/prefetch';
 
 export type RepeatMode = 'off' | 'all' | 'one';
 
@@ -111,27 +113,8 @@ export function usePlayerTime(): number {
   return useContext(PlayerTimeContext);
 }
 
-/** How long into a track to start pulling the next one down. */
-const WARM_AFTER_MS = 8_000;
-
-/**
- * Whether to speculatively fetch audio that has not been asked for.
- *
- * `saveData` is an explicit request not to spend the user's bytes, and on 2G a
- * speculative megabyte competes with the track that is actually playing. The API
- * is Chromium-only; absent means there is no reason to hold back.
- */
-function shouldWarm(): boolean {
-  if (typeof navigator === 'undefined') return false;
-  const connection = (
-    navigator as Navigator & {
-      connection?: { saveData?: boolean; effectiveType?: string };
-    }
-  ).connection;
-  if (!connection) return true;
-  if (connection.saveData) return false;
-  return connection.effectiveType !== 'slow-2g' && connection.effectiveType !== '2g';
-}
+/** How long into a track to start prefetching the next one. */
+const PREFETCH_AFTER_MS = 8_000;
 
 /** Fisher-Yates over indices, with `first` pulled to the front if given. */
 function shuffledOrder(length: number, first?: number): number[] {
@@ -288,19 +271,47 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
    * gets there second finds the element already pointed at the right track and
    * only resumes it.
    */
+  /**
+   * Revoke any blob URL we previously created from the cache, so the blob can
+   * be garbage-collected. Only blob: URLs are revoked; the original https: URL
+   * is a server resource and revoking it would be a no-op at best.
+   */
+  const revokePreviousBlobRef = useRef<string | null>(null);
+
   const loadTrack = useCallback((track: TrackView, autoplay: boolean) => {
     const audio = audioRef.current;
     if (!audio) return;
 
     if (audio.dataset.trackId !== track.id) {
       audio.dataset.trackId = track.id;
-      audio.src = track.audio_url;
-      audio.load();
+
+      // Revoke the previous blob URL if there was one.
+      if (revokePreviousBlobRef.current) {
+        URL.revokeObjectURL(revokePreviousBlobRef.current);
+        revokePreviousBlobRef.current = null;
+      }
+
       setCurrentTime(0);
       setFailed(false);
-    }
 
-    if (autoplay) startAudio(audio);
+      // Check the browser cache first — if the track was saved for offline
+      // playback, `resolveAudioSrc` returns a blob: URL that reads from local
+      // storage with zero network latency.
+      void resolveAudioSrc(track.audio_url).then((src) => {
+        // Guard: another track may have been loaded while we awaited.
+        if (audio.dataset.trackId !== track.id) {
+          if (src.startsWith('blob:')) URL.revokeObjectURL(src);
+          return;
+        }
+
+        if (src.startsWith('blob:')) revokePreviousBlobRef.current = src;
+        audio.src = src;
+        audio.load();
+        if (autoplay) startAudio(audio);
+      });
+    } else if (autoplay) {
+      startAudio(audio);
+    }
   }, [startAudio]);
 
   // Load whichever track is current. Keyed on the id, not the object: the queue
@@ -688,69 +699,89 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [isPlaying, next, previous, seek, startAudio]);
 
   /**
-   * Whatever `advance(1)` would land on — the track to warm, and nothing else
-   * uses it. Mirrors `advance`'s wrapping exactly: one past the end is the top of
-   * the order under `repeat: 'all'`, and the end of the road otherwise.
+   * The next few tracks in play order, for predictive prefetching. Up to three
+   * ahead, respecting repeat-all wrapping. The tracks that `advance(1)` would
+   * eventually reach, in the order they would be reached.
    */
-  const upcoming = useMemo<TrackView | null>(() => {
-    if (order.length === 0) return null;
-    const slot = position + 1;
-    if (slot < order.length) return queue[order[slot]] ?? null;
-    return repeat === 'all' ? (queue[order[0]] ?? null) : null;
+  const upcomingTracks = useMemo<TrackView[]>(() => {
+    if (order.length === 0) return [];
+    const tracks: TrackView[] = [];
+    const seen = new Set<string>();
+    for (let i = 1; i <= 3; i++) {
+      let slot = position + i;
+      if (slot >= order.length) {
+        if (repeat !== 'all') break;
+        slot = slot % order.length;
+      }
+      const idx = order[slot];
+      if (idx === undefined) break;
+      const track = queue[idx];
+      if (track && !seen.has(track.id)) {
+        seen.add(track.id);
+        tracks.push(track);
+      }
+    }
+    return tracks;
   }, [order, position, queue, repeat]);
 
-  const warmRef = useRef<HTMLAudioElement | null>(null);
+  /**
+   * Ref that stays in sync with the latest `upcomingTracks` without being a
+   * direct dependency of the prefetch effect — the effect keys off
+   * `prefetchKey` for stability, and reads the ref inside the timer callback.
+   */
+  const upcomingRef = useRef(upcomingTracks);
+  upcomingRef.current = upcomingTracks;
 
   /**
-   * Pull the next track down before it is asked for.
+   * Stable key derived from the upcoming track IDs, so the prefetch effect
+   * only re-triggers when the *content* changes, not when React builds a new
+   * array wrapper from the same data.
+   */
+  const prefetchKey = upcomingTracks.map((t) => t.id).join(',');
+
+  /**
+   * Predictive prefetch: download upcoming tracks into the Cache API while the
+   * current one plays, so `resolveAudioSrc` returns a `blob:` URL at transition
+   * time — no network request, no TTFB, instant playback.
    *
-   * This is the single biggest latency win available on this app, and it is worth
-   * being explicit about why: the store answers in ~1s regardless of how many
-   * bytes are wanted, but it does send `Cache-Control: public, max-age=86400`.
-   * So the first request for a file is slow and every request for the rest of the
-   * day is a disk-cache hit. Warming moves that one slow request off the moment
-   * the user is waiting on and into the middle of the previous track.
+   * This replaces the previous `new Audio()` warm strategy. That approach filled
+   * the browser's HTTP disk cache, but `resolveAudioSrc` still fell back to the
+   * original URL and the `<audio>` element still negotiated range requests over
+   * the network. The Cache API path is strictly better: the file becomes a local
+   * blob and playback starts in the time it takes to parse the container header.
    *
-   * A detached `new Audio()` rather than `<link rel="preload" as="audio">`: the
-   * link has a different request mode and can end up with a cache entry the media
-   * element will not reuse. This mirrors what the real element does byte for byte
-   * — same `preload`, and deliberately **no `crossOrigin`**, because a bare
-   * `<audio src>` is a no-CORS credentialed fetch and setting it here would make
-   * a second, unusable cache entry.
+   * Multiple tracks are prefetched (up to 3 on a fast connection, 1 on 3G, 0 on
+   * 2G) so that rapid skips also hit the cache. Downloads are sequential — N+1
+   * first, then N+2 — so a slow link still finishes the most important one.
    *
-   * Started `WARM_AFTER_MS` in, so it competes with nothing: by then the current
-   * track has its own buffer and the connection to the host is already open.
+   * Started `PREFETCH_AFTER_MS` into the current track so it competes with
+   * nothing: by then the playing track has its own buffer and the connection to
+   * the host is already open.
    */
   useEffect(() => {
-    if (!isPlaying || !upcoming) return;
-    // `repeat: 'one'` never advances, so there is nothing to warm.
+    if (!isPlaying || !prefetchKey) return;
     if (repeat === 'one') return;
-    if (warmRef.current?.dataset.url === upcoming.audio_url) return;
-    if (!shouldWarm()) return;
 
     const timer = window.setTimeout(() => {
-      // Drop the previous warm target only now, inside the timer, not on every
-      // re-run: when a track ends, the thing being dropped is the file that just
-      // started playing, and cancelling that fetch a frame after the handover is
-      // exactly the wrong moment. Eight seconds later it is harmless.
-      const previous = warmRef.current;
-      if (previous) {
-        previous.removeAttribute('src');
-        previous.load();
-      }
+      const tracks = upcomingRef.current;
+      if (tracks.length === 0) return;
+      const targets = tracks.map((t) => ({
+        trackId: t.id,
+        audioUrl: t.audio_url,
+        coverUrl: t.album_cover_url,
+      }));
+      void prefetchAhead(targets);
+    }, PREFETCH_AFTER_MS);
 
-      const warm = new Audio();
-      warm.preload = 'auto';
-      warm.dataset.url = upcoming.audio_url;
-      warm.src = upcoming.audio_url;
-      warm.load();
-      warmRef.current = warm;
-    }, WARM_AFTER_MS);
-
-    // Only the timer is unwound. An in-flight warm fetch is left to finish —
-    // pausing is not a reason to throw away bytes already paid for.
+    // Only the timer is unwound. An in-flight prefetch is left to finish —
+    // pausing is not a reason to throw away bytes already paid for. A *new*
+    // set of targets (different `prefetchKey`) cancels the previous run
+    // inside `prefetchAhead` before starting its own.
     return () => window.clearTimeout(timer);
-  }, [isPlaying, repeat, upcoming]);
+    // `upcomingRef` is read inside the timer, not here — `prefetchKey` is
+    // the stable derivative that controls re-triggering.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying, repeat, prefetchKey]);
 
   const value = useMemo<PlayerApi>(
     () => ({

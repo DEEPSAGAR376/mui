@@ -309,7 +309,7 @@ function Sheet({
                 </IconButton>
               </div>
 
-              <div className="mt-1 flex justify-center">
+              <div className="mt-1 flex justify-center gap-1">
                 <LikeButton trackId={current.id} />
               </div>
             </div>

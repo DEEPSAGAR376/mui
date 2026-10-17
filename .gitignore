@@ -50,3 +50,6 @@ next-env.d.ts
 # local agent state. settings.json holds approved-command entries with an API key
 # pasted inline, so this directory is deliberately never committed.
 /.claude/
+/.codegraph/
+/.firecrawl/
+/.cursor/
